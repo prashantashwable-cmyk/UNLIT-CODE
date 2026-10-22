@@ -31,4 +31,6 @@
 6. **Yellow status.** Yellow means both "waiting for someone" and "within the last 25 % of the time limit"; both trigger yellow.
 7. **jsPDF / qrcode** are vendored in the phases that use them (6, 7). Tesseract was added in Phase 2.
 8. **"Address from GPS" when the lookup fails online.** Nominatim can fail or rate-limit; the lead then uses the nearest Pune locality ("Near Wakad, Pune") so it is not stuck, and it is refined later. Offline it stays "address pending" (stage 1) until the phone is back online.
+10. **Who runs the Sales Bot.** There is no server, so the bot acts when a desk user taps "Run sales bot", when the customer replies or counters, and when the desk opens (reminder catch-up). In demo mode the desk can also play the site contact's WhatsApp reply and "one silent day". Real WhatsApp/calls need the WhatsApp Business API and a telephony provider.
+11. **Bot meeting a counter-offer.** When a customer asks for more than the bot's next step, the bot offers the customer's number (still within its limit) instead of dropping further.
 9. **"Verified" lead.** Stage 2 checks (not duplicate, AI photo check, inside geofence) are computed at capture; the move 2 → 3 and the "verified lead" money belong to Sales (Phase 3).

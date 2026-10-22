@@ -4,7 +4,7 @@ Installable, offline-first web app for AIEC (Pune): one Project record per lift,
 first lead photo to the last AMC visit. Built for people who cannot read well: every field
 screen **speaks first**, uses **pictures + colours**, big buttons and **zero typing**.
 
-> Status: **Phase 1 – Foundation** and **Phase 2 – Rider** done (see "What's done"). Phases 3–9 follow, one at a time.
+> Status: Phases **1 – Foundation**, **2 – Rider** and **3 – Sales** done (see "What's done"). Phases 4–9 follow, one at a time.
 
 ## Run it
 
@@ -94,6 +94,29 @@ with resident tickets (0012). Ledger entries exist in every bucket and riders ha
 - **Leaderboard** (weekly, by verified leads and wins – not raw photos) and **End day** spoken summary
   (km, leads, money earned today).
 
+## What's done (Phase 3 – Sales)
+
+- **Price engine** (`js/pricing.js`): base from the rate card (floors G+1…G+12, automatic/manual,
+  SS/MS powder-coated, access difficulty 0–2, extra shaft metres); first quote = base × 1.60; bot steps
+  1.50 → 1.40 → 1.30 (one step per customer counter-offer, each asking something back: pay token
+  today / refer a site / sign AMC); negotiator down to 1.20 (floor); below the floor only the Owner,
+  with a reason. GST shown as a separate line. Payment schedule (token off the 70 % milestone) always
+  adds up to the price.
+- **Quote guard**: every saved quote goes through `api.js`, which refuses any amount below the
+  role's limit ("not allowed for you" – the bot never reveals its limit).
+- **Sales Bot simulation** with a visible log: verifies the lead (stage 2 → 3, rider gets the
+  "verified lead" money), WhatsApp with site photos in all three languages, reply buttons, auto-call
+  transcript + requirement, first quote (stage 3 → 4). Customer counter-offers get an instant bot answer.
+- **Hand-off**: below the bot limit, or when the customer taps "Talk to a person", the lead goes to the
+  **negotiator desk** with chat history, photos, price history and a floor indicator (never the base cost).
+- **Customer**: answers the WhatsApp, sees the offer (digits, coins, voice), Accept / Counter / Talk to a person.
+  Accepting moves the project to stage 5 with its payment schedule. The site contact becomes a Customer
+  account (phone + OTP).
+- **Silent customer**: a reminder each silent day, after 3 reminders the lead is **cold** and returns to the
+  rider's map as a "Revisit" pin; capturing it again puts it back in the sales queue.
+- **Owner**: below-floor price requests wait on the Owner's Today page (approve / say no).
+- **Negotiator Today**: hand-offs first, leads sorted by score with "Run sales bot", evening pipeline report.
+
 ## Folder
 
 ```
@@ -132,6 +155,8 @@ npx playwright test
 - `layout.spec.js` – no sideways scroll at 360 / 768 / 1280 px; field targets ≥ 64 px at 20 % scale.
 - `rider.spec.js` – 3-screen capture with zero typing and real OCR, duplicate within 50 m attaches,
   capture locked while moving, AI retake + appeal, end-day summary, rider map, offline address pending.
+- `sales.spec.js` – full lead → WhatsApp → reply → quote → 1.50/1.40/1.30 counters → hand-off → negotiator
+  (below floor refused) → accept; quote guard per role incl. Owner; cold after 3 reminders → revisit pin.
 - `pwa.spec.js` – Chrome installability check (no errors), works offline after first load, real-mode install gate.
 
 After editing shell files run `node tools/gen-precache.mjs` (a test fails if the list is stale).

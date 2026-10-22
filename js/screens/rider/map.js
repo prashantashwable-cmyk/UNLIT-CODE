@@ -21,8 +21,8 @@ export default async function riderMap() {
     h('span', {}, h('i', { class: 'lg lg-suggest' }), t('map.suggested')));
   const list = leads.length ? h('div', { class: 'map-list' }, leads.map((p) => card([
     h('div', { class: 'pc-head' }, statusDot(p.colour), h('strong', {}, p.code), h('span', { class: 'pc-area' }, L(p.site.area))),
-    h('div', {}, stageName(p.stage)),
-  ], { colour: p.colour, onClick: () => { location.hash = `#/project/${p.id}`; } }))) : emptyState('bike', t('next.empty.rider'));
+    h('div', {}, p.flags?.cold ? h('strong', { class: 'c-text-yellow', 'data-testid': `revisit-${p.id}` }, t('rider.revisit')) : stageName(p.stage)),
+  ], { colour: p.flags?.cold ? 'yellow' : p.colour, onClick: () => { location.hash = `#/project/${p.id}`; } }))) : emptyState('bike', t('next.empty.rider'));
 
   const mounted = async () => {
     try {
@@ -36,7 +36,10 @@ export default async function riderMap() {
       const today = data.todayRoute.length ? routeLine(map, data.todayRoute, '#1e5bb8') : null;
       const pins = Lf.layerGroup().addTo(map);
       for (const p of leads) {
-        const m = statusPin(pins, p.site.lat, p.site.lng, p.colour, { label: `${p.code} · ${stageName(p.stage)}` });
+        // Cold leads come back as "revisit" pins.
+        const m = statusPin(pins, p.site.lat, p.site.lng, p.flags?.cold ? 'yellow' : p.colour, {
+          label: p.flags?.cold ? `${t('rider.revisit')} · ${p.code}` : `${p.code} · ${stageName(p.stage)}`,
+        });
         m.on('click', async () => {
           const ev = (await api.listEvidence(p.id)).find((e) => e.files?.length);
           const url = ev ? await api.getFileURL(ev.files[0].file_id).catch(() => null) : null;

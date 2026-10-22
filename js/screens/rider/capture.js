@@ -112,7 +112,7 @@ export async function captureLead({ user, role }) {
   const near = pos ? await api.findSiteNear(pos) : null;
   if (near) {
     // Already with us: photos will update the existing site.
-    const msg = t('rider.duplicateWarn', { code: near.code });
+    const msg = near.own ? t('rider.revisitWarn', { code: near.code }) : t('rider.duplicateWarn', { code: near.code });
     feedback('waiting');
     toast(msg, 'yellow');
     speak(msg);
@@ -148,7 +148,7 @@ export async function captureLead({ user, role }) {
           phone, consent, pos: { lat: last.lat, lng: last.lng, accuracy: last.accuracy }, address: last.address_pending ? null : last.address,
         });
         feedback('money');
-        const msg = result.duplicate ? t('rider.updateSaved', { code: result.code }) : t('rider.leadSaved', { code: result.code });
+        const msg = result.duplicate || result.revisit ? t('rider.updateSaved', { code: result.code }) : t('rider.leadSaved', { code: result.code });
         toast(msg, 'green');
         speak(msg);
       } catch (e) { showError(e); }

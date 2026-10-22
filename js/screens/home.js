@@ -17,6 +17,7 @@ async function earnText(role, step) {
 
 export default async function home(ctx) {
   if (ctx.role === 'rider') return (await import('./rider/today.js')).default(ctx);
+  if (ctx.role === 'negotiator') return (await import('./sales/desk.js')).default(ctx);
   const { role, user, refresh } = ctx;
   const group = roleGroup(role);
   const node = h('div', { class: 'today' });
@@ -57,6 +58,23 @@ export default async function home(ctx) {
               onClick: async () => { try { await api.confirmOverride(o.id); feedback('success'); toast(t('override.done'), 'green'); refresh(); } catch (e) { showError(e); } },
             }),
         ], { colour: 'red' }));
+      }
+    }
+
+    // Below-floor prices wait for the Owner.
+    const priceReqs = await api.listPriceRequests();
+    if (priceReqs.length && ['owner', 'admin'].includes(role)) {
+      node.append(sectionTitle(t('sales.priceDecisions'), 'crown'));
+      for (const r of priceReqs) {
+        node.append(card([
+          h('div', { class: 'pc-head' }, h('strong', {}, r.code), h('span', { class: 'pc-area' }, formatINR(r.amount))),
+          r.floor ? h('p', { class: 'c-text-red' }, t('sales.belowBy', { amount: formatINR(r.floor - r.amount) })) : null,
+          h('p', {}, t('override.reasonWas', { reason: r.reason })),
+          role === 'owner' ? h('div', { class: 'btn-row' },
+            bigButton({ icon: 'check', label: t('sales.approvePrice'), colour: 'green', small: true, testid: `price-yes-${r.id}`, onClick: async () => { try { await api.decidePriceRequest(r.id, true); feedback('success'); refresh(); } catch (e) { showError(e); } } }),
+            bigButton({ icon: 'close', label: t('sales.rejectPrice'), colour: 'red', small: true, testid: `price-no-${r.id}`, onClick: async () => { try { await api.decidePriceRequest(r.id, false); feedback('waiting'); refresh(); } catch (e) { showError(e); } } }))
+            : h('p', { class: 'hint' }, t('sales.ownerDecides')),
+        ], { colour: 'red', testid: `price-req-${r.project_id}` }));
       }
     }
 

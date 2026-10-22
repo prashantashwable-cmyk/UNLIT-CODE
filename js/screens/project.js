@@ -13,6 +13,7 @@ import { isStageOwner, stageClock, progressPct, LAST_STAGE, stageDef } from '../
 import { openCamera } from '../camera.js';
 import { setDemoPosition } from '../geo.js';
 import { sectionTitle, stageName } from './common.js';
+import { salesPanel } from './sales/panel.js';
 
 const GHOST = { 'lead.site': 'site', 'lead.shaft': 'shaft', 'lead.board': 'board', 'readiness.shaft': 'shaft', 'readiness.power': 'part', 'dispatch.packing': 'part' };
 const SCENE = { 'lead.site': 'site', 'lead.shaft': 'shaft', 'lead.board': 'board', 'readiness.shaft': 'readiness', 'readiness.power': 'readiness', 'dispatch.packing': 'packing' };
@@ -228,6 +229,11 @@ function noteFor(e) {
   if (e.action === 'evidence.add') return t(`gate.${e.note}`);
   if (e.action === 'gate.approve') return t(`gatekey.${e.note}`);
   if (e.action === 'lead.update') return t(`rider.update.${e.note}`);
+  if (['quote.save', 'sales.counter', 'sales.accept'].includes(e.action)) return formatINR(Number(e.note));
+  if (e.action === 'sales.reply') return t(`wa.btn.${e.note}`);
+  if (e.action === 'bot.offer') return t(`ask.${e.note}`);
+  if (e.action === 'sales.handoff') return t(`sales.why.${e.note}`);
+  if (e.action === 'bot.whatsapp' || e.action === 'bot.call' || e.action === 'bot.quote' || e.action === 'sales.cold' || e.action === 'lead.revisit') return null;
   if (e.action === 'lead.capture') return null;
   return e.note; // typed reason or bridge number
 }
@@ -259,6 +265,7 @@ export default async function projectScreen({ params, user, role, refresh }) {
       p.lead?.duplicates?.length ? h('div', { class: 'hint' }, icon('layers', 'ic sm'), t('project.duplicates', { n: p.lead.duplicates.length })) : null,
       p.issues?.filter((i) => i.status === 'open').map((i) => h('div', { class: 'c-text-red' }, icon('warning', 'ic sm'), t(`issue.${i.type}`)))),
     gatePanel(p, { user, role, refresh }),
+    await salesPanel(p, { role, refresh }),
     bigButton({ icon: 'chat', label: t('project.openChat'), colour: 'blue', small: true, onClick: () => { location.hash = `#/chat/${p.id}/main`; } }),
     tracker(p, evidence),
     contactSection(p, { user, role }),

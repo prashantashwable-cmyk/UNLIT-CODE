@@ -11,6 +11,8 @@ import { recordVoice } from '../chat.js';
 import { openCamera } from '../camera.js';
 import { sectionTitle, msgText } from './common.js';
 
+const SALES_TYPES = new Set(['bot', 'whatsapp', 'call', 'quote', 'reply', 'counter', 'accept']);
+
 function preview(m) {
   if (!m) return t('chat.noMessages');
   if (m.type === 'voice') return `🎤 ${t('chat.voiceNote')}`;
@@ -42,6 +44,18 @@ function bubble(m, me, refresh, role) {
   const mine = m.by === me.id;
   const body = h('div', { class: 'bubble-body' });
   if (m.type === 'text') body.append(msgText(m.content));
+  else if (SALES_TYPES.has(m.type)) {
+    // Sales bot / WhatsApp / call / quote messages: translated text, site photos, link to answer.
+    body.append(h('div', { class: `sales-msg t-${m.type}` }, m.type === 'whatsapp' ? icon('chat', 'ic sm') : m.type === 'call' ? icon('phone', 'ic sm') : null, msgText(m.content)));
+    if (m.file_ids?.length) {
+      const row = h('div', { class: 'tr-pics' });
+      m.file_ids.forEach((id) => { const img = h('img', { class: 'thumb', alt: t('chat.photo') }); api.getFileURL(id).then((u) => { img.src = u; }).catch(() => img.remove()); row.append(img); });
+      body.append(row);
+    }
+    if (m.buttons?.length && role === 'customer' && !mine && !m.project_id.startsWith('support:')) {
+      body.append(h('a', { class: 'link-btn', href: `#/project/${m.project_id}` }, t('sales.answerHere')));
+    }
+  }
   else if (m.type === 'callback') body.append(icon('callback', 'ic sm'), t('help.callbackSent'));
   else if (m.type === 'answer') body.append(icon(m.content === 'approved' ? 'thumbUp' : 'thumbDown', 'ic sm'), t(`chat.answer.${m.content}`), ` · ${t(`gatekey.${m.gate}`)}`);
   else if (m.type === 'voice' || m.type === 'photo') {

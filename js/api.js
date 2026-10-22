@@ -12,6 +12,9 @@ import { weightedRating } from './trust.js';
 import { lastKnownFix, setDemoMode, distanceM, GEOFENCE_M, speedKmh, SUSPICIOUS_KMH } from './geo.js';
 import { coveredHexes, routeKm, neighbours, hexId, hexCenter, HEX_AREA_KM2 } from './hex.js';
 import { seedDemo, DEFAULT_RULES, AREAS } from './seed.js';
+import {
+  baseCost, priceAt, levelOf, quoteAllowed, botCounter, paymentSchedule, leadScore, FIRST_LEVEL, FLOOR_LEVEL, BOT_LIMIT,
+} from './pricing.js';
 
 export { PermissionError };
 
@@ -51,6 +54,16 @@ export function setMode(mode) {
   setDemoMode(mode === 'demo');
 }
 export const isDemo = () => getMode() === 'demo';
+
+// System actions (the Sales Bot) run "as" the bot user, so the timeline shows who really acted.
+let actingAs = null;
+function actor() { return actingAs || { user: me, role: session?.role }; }
+async function asBot(fn) {
+  const bot = await db.get('users', 'u_bot');
+  const prev = actingAs;
+  actingAs = { user: bot, role: 'salesbot' };
+  try { return await fn(); } finally { actingAs = prev; }
+}
 
 export function currentUser() { return me; }
 export function currentRole() { return session?.role || null; }
@@ -448,6 +461,11 @@ export async function advanceStage(projectId) {
   const p = await rawProject(projectId);
   assertCan(user, role, 'project.view', p);
   if (!isStageOwner(role, p)) throw new PermissionError('stage.advance', 'not-owner');
+  return doAdvance(p);
+}
+
+// Gate check + move + money event. Callers have already checked who may do it.
+async function doAdvance(p) {
   const gate = await gateFor(p);
   if (!gate.ok) throw new ApiError('gate.notMet');
   const next = nextStage(p);
@@ -550,7 +568,7 @@ export async function listEvents(projectId) {
 async function logEvent(projectId, action, { proof_ids = [], note = '', loud = false } = {}) {
   const fix = lastKnownFix();
   const rec = {
-    id: db.uid('evt'), project_id: projectId, who: me?.id, who_name: me?.name, role: session?.role, action,
+    id: db.uid('evt'), project_id: projectId, who: actor().user?.id, who_name: actor().user?.name, role: actor().role, action,
     time_device: Date.now(), time_server: null, gps: fix ? { lat: fix.lat, lng: fix.lng, accuracy: fix.accuracy } : null,
     proof_ids, note, loud, assisted_by: session?.assistedBy?.id || null,
   };
@@ -723,8 +741,13 @@ export async function nextStep() {
   const { role } = requireLogin();
   const projects = await listProjects();
   const rank = { red: 0, yellow: 1, green: 2 };
-  const mine = projects.filter((p) => isStageOwner(role, p) && role !== 'admin')
-    .sort((a, b) => rank[a.colour] - rank[b.colour] || a.stage - b.stage);
+  const mine = projects.filter((p) => {
+    if (role === 'admin') return false;
+    // Price talks: the negotiator only handles hand-offs; the customer answers the bot's offer.
+    if (p.stage === 4 && role === 'negotiator') return !!p.flags?.handoff;
+    if (p.stage === 4 && role === 'customer') return !!p.price && !p.price.accepted && p.price.by !== 'customer';
+    return isStageOwner(role, p);
+  }).sort((a, b) => rank[a.colour] - rank[b.colour] || a.stage - b.stage);
   if (mine.length) return { project: mine[0], kind: 'do' };
   if (role === 'admin') {
     const urgent = projects.filter((p) => p.colour !== 'green').sort((a, b) => rank[a.colour] - rank[b.colour]);
@@ -733,6 +756,336 @@ export async function nextStep() {
   const waiting = projects.filter((p) => p.stage < 16).sort((a, b) => rank[a.colour] - rank[b.colour])[0];
   if (waiting) return { project: waiting, kind: 'wait', waitingFor: stageDef(waiting.stage).owners };
   return null;
+}
+
+// ---------- sales: bot, negotiator, owner ----------
+// The Sales Bot is the system: in this demo a desk user (negotiator/admin) presses "Run sales bot",
+// and customer replies/counter-offers make the bot answer straight away.
+
+const SALES_DESK = ['negotiator', 'admin'];
+const HOUR = 3600 * 1000;
+
+function requireDesk() {
+  const ctx = requireLogin();
+  if (!SALES_DESK.includes(ctx.role)) throw new PermissionError('sales.desk');
+  return ctx;
+}
+
+// Message from the bot (or the site contact) into the project chat. content = {key, params} so it shows in every language.
+async function postMessage(p, { type = 'bot', content, by, file_ids = null, buttons = null }) {
+  const who = by || actor();
+  const rec = {
+    id: db.uid('msg'), project_id: p.id, thread: 'main', by: who.user?.id || who.id, by_name: who.user?.name || who.name, role: who.role,
+    type, content, file_ids, buttons, file_id: null, gate: null, time_device: Date.now(), time_server: null,
+  };
+  await write('messages', rec);
+  emit('chat');
+  return rec.id;
+}
+
+const contactActor = (p) => ({ id: `contact:${p.id}`, name: p.contact?.name, role: 'customer' });
+
+async function sitePhotoIds(p) {
+  return (await db.getByIndex('evidence', 'project_id', p.id)).filter((e) => e.step_key.startsWith('lead.')).flatMap((e) => e.files.map((f) => f.file_id));
+}
+
+// The site contact becomes a Customer account (logs in later with phone + OTP).
+async function ensureCustomer(p) {
+  if (p.customer_id) return;
+  const existing = (await db.getByIndex('users', 'phone', p.contact.phone))[0];
+  const id = existing?.id || `u_c_${p.id}`;
+  if (!existing) {
+    await db.put('users', {
+      id, name: p.contact.name, roles: ['customer'], phone: p.contact.phone, area: p.site.area, level: 'customer', lang: 'mr',
+      pin_hash: null, face_ref: null, kyc_status: 'pending', trust: null, rating_sum: 0, rating_count: 0, status: 'active',
+    });
+  }
+  p.customer_id = id;
+}
+
+function defaultSpec(p) {
+  // The bot's call asks the floors; demo picks a believable answer from the project number.
+  const n = Number(p.code.split('-').pop()) || 4;
+  const floors = 4 + (n % 5);
+  return { floors, stops: floors + 1, type: 'automatic', finish: 'SS', access: n % 3 === 0 ? 1 : 0, load_kg: 408 };
+}
+
+// Stage 2 → 3: the bot verifies the lead and sends the WhatsApp with the site photos.
+async function botVerifyAndWhatsApp(p) {
+  await doAdvance(p); // gate: not duplicate, AI photo check, inside geofence; pays "verified lead"
+  const photos = await sitePhotoIds(p);
+  p.sales = { ...(p.sales || {}), whatsapp_sent: Date.now(), reminders: 0, last_contact: Date.now() };
+  await db.put('projects', p);
+  await postMessage(p, {
+    type: 'whatsapp', file_ids: photos.slice(0, 3),
+    content: { key: 'wa.template', params: { code: p.code, area: p.site.area } },
+    buttons: ['interested', 'later', 'no'],
+  });
+  await logEvent(p.id, 'bot.whatsapp', { note: 'wa.template' });
+}
+
+// Auto call after an "interested" reply: transcript + requirement captured.
+async function botCall(p) {
+  const spec = { ...defaultSpec(p), ...(p.spec || {}) };
+  p.spec = spec;
+  p.sales = { ...(p.sales || {}), call_logged: Date.now(), last_contact: Date.now() };
+  await db.put('projects', p);
+  await postMessage(p, { type: 'call', content: { key: 'bot.callTranscript', params: { floors: spec.floors, type: spec.type, finish: spec.finish } } });
+  await logEvent(p.id, 'bot.call');
+}
+
+// Stage 3 → 4: price from the rate card, first quote at base × 1.60.
+async function botFirstQuote(p) {
+  const rules = await getRules();
+  const base = baseCost(p.spec, rules.rate_card);
+  p.costing = { base, floor: priceAt(base, FLOOR_LEVEL), margin: priceAt(base, FIRST_LEVEL) - base, supply_price: Math.round(base * 0.62) };
+  await doAdvance(p);
+  await saveQuoteAs(p, 'salesbot', priceAt(base, FIRST_LEVEL), { step: 0 });
+  await postMessage(p, { type: 'quote', content: { key: 'bot.firstQuote', params: { amount: p.price.amount, gst: rules.gst_pct } }, buttons: ['accept', 'counter', 'person'] });
+  await logEvent(p.id, 'bot.quote');
+}
+
+// Every saved quote goes through here: the "server" refuses anything below the role's limit.
+async function saveQuoteAs(p, role, amount, { reason = '', step = null, ask = null } = {}) {
+  const base = p.costing?.base;
+  if (!base) throw new ApiError('quote.noBase');
+  if (!quoteAllowed(role, amount, base, reason)) throw new ApiError('quote.belowLimit');
+  const q = { amount, level: Math.round(levelOf(amount, base) * 1000) / 1000, by: role, time: Date.now(), ask, reason: reason || null };
+  p.quote_history = [...(p.quote_history || []), q];
+  p.price = { amount, level: q.level, by: role, accepted: false, step: step ?? (p.price?.step || 0), ask };
+  await db.put('projects', p);
+  await queue('projects', p.id, 'quote.save');
+  await logEvent(p.id, 'quote.save', { note: String(amount), loud: !!reason });
+  return q;
+}
+
+// Desk: "Run sales bot" – does whatever the bot would do next for this lead.
+export async function botRun(projectId) {
+  requireDesk();
+  const p = await rawProject(projectId);
+  return asBot(async () => {
+    if (p.stage === 2) { await botVerifyAndWhatsApp(p); return 'whatsapp'; }
+    if (p.stage === 3 && p.sales?.reply === 'interested' && !p.sales?.call_logged) { await botCall(p); return 'call'; }
+    if (p.stage === 3 && p.sales?.call_logged) { await botFirstQuote(p); return 'quote'; }
+    throw new ApiError('sales.nothingToDo');
+  });
+}
+
+// Reply to the WhatsApp: the customer (or, in the demo, the desk acting for the site contact).
+export async function recordReply(projectId, reply) {
+  const { user, role } = requireLogin();
+  if (!['interested', 'later', 'no'].includes(reply)) throw new ApiError('error.generic');
+  const p = await rawProject(projectId);
+  const isOwnCustomer = role === 'customer' && p.customer_id === user.id;
+  if (!isOwnCustomer && !(isDemo() && SALES_DESK.includes(role))) throw new PermissionError('sales.reply');
+  if (p.stage !== 3) throw new ApiError('sales.nothingToDo');
+  p.sales = { ...(p.sales || {}), reply, reply_time: Date.now(), last_contact: Date.now(), reminders: 0 };
+  if (p.flags?.cold) p.flags.cold = false;
+  if (reply === 'interested') await ensureCustomer(p);
+  await db.put('projects', p);
+  await postMessage(p, { type: 'reply', by: contactActor(p), content: { key: `wa.reply.${reply}`, params: {} } });
+  await logEvent(p.id, 'sales.reply', { note: reply });
+  if (reply === 'interested') await asBot(() => botCall(p));
+  return reply;
+}
+
+// Desk can correct what the call captured (floors, type, finish, access).
+export async function setRequirement(projectId, spec) {
+  requireDesk();
+  const p = await rawProject(projectId);
+  if (p.stage > 3) throw new ApiError('sales.tooLate');
+  const floors = Math.max(1, Math.min(12, Math.round(spec.floors)));
+  p.spec = {
+    ...(p.spec || {}), floors, stops: floors + 1,
+    type: spec.type === 'manual' ? 'manual' : 'automatic',
+    finish: spec.finish === 'MS_powder' ? 'MS_powder' : 'SS',
+    access: Math.max(0, Math.min(2, Math.round(spec.access || 0))),
+  };
+  await db.put('projects', p);
+  await logEvent(p.id, 'sales.requirement', { note: `G+${floors}` });
+  return p.spec;
+}
+
+// Customer counter-offer. The bot answers at once (one ladder step, asking something back),
+// or hands over to a negotiator below its limit. It never says what the limit is.
+export async function counterOffer(projectId, amount) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  if (role !== 'customer' || p.customer_id !== user.id) throw new PermissionError('quote.counter');
+  if (p.stage !== 4 || !p.price || p.price.accepted) throw new ApiError('sales.nothingToDo');
+  const value = Math.round(Number(amount));
+  if (!(value > 0)) throw new ApiError('error.generic');
+  p.quote_history = [...(p.quote_history || []), { amount: value, by: 'customer', time: Date.now() }];
+  p.price = { ...p.price, counter: value };
+  p.sales = { ...(p.sales || {}), last_contact: Date.now(), reminders: 0 };
+  await db.put('projects', p);
+  await postMessage(p, { type: 'counter', content: { key: 'sales.counterMsg', params: { amount: value } } });
+  await logEvent(p.id, 'sales.counter', { note: String(value) });
+  if (p.flags?.handoff) return { action: 'handoff' }; // a negotiator is already on it
+  return asBot(async () => {
+    const r = botCounter({ base: p.costing.base, currentLevel: p.price.level, counter: value, step: p.price.step || 0 });
+    if (r.action === 'accept') {
+      await postMessage(p, { type: 'bot', content: { key: 'bot.acceptCounter', params: { amount: r.amount } }, buttons: ['accept'] });
+      return r;
+    }
+    if (r.action === 'offer') {
+      await saveQuoteAs(p, 'salesbot', r.amount, { step: (p.price.step || 0) + 1, ask: r.ask });
+      await postMessage(p, { type: 'quote', content: { key: 'bot.offer', params: { amount: r.amount, ask: r.ask } }, buttons: ['accept', 'counter', 'person'] });
+      await logEvent(p.id, 'bot.offer', { note: r.ask });
+      return r;
+    }
+    await handOff(p, 'below_bot_limit');
+    return r;
+  });
+}
+
+async function handOff(p, why) {
+  p.flags = { ...(p.flags || {}), handoff: true, handoff_time: Date.now(), handoff_why: why };
+  await db.put('projects', p);
+  await postMessage(p, { type: 'bot', content: { key: 'bot.handoff', params: {} } });
+  await logEvent(p.id, 'sales.handoff', { note: why });
+}
+
+// "Talk to a person" button on the customer side.
+export async function askForPerson(projectId) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  if (role !== 'customer' || p.customer_id !== user.id) throw new PermissionError('quote.person');
+  await asBot(() => handOff(p, 'customer_asked'));
+}
+
+// Customer accepts the current offer → stage 5, payment schedule made.
+export async function acceptQuote(projectId) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  if (role !== 'customer' || p.customer_id !== user.id) throw new PermissionError('quote.accept');
+  if (p.stage !== 4 || !p.price) throw new ApiError('sales.nothingToDo');
+  // A counter the bot already said yes to is accepted at the bot's price (never below it).
+  const rules = await getRules();
+  p.price = { ...p.price, accepted: true, accepted_time: Date.now() };
+  p.flags = { ...(p.flags || {}), handoff: false };
+  p.payments = paymentSchedule(p.price.amount, { token: rules.token_amount, tokenFromDelivery: rules.token_from_delivery, pct: rules.milestones })
+    .map((r) => ({ ...r, status: 'due', time: null }));
+  await db.put('projects', p);
+  await postMessage(p, { type: 'accept', by: { user, role }, content: { key: 'sales.acceptedMsg', params: { amount: p.price.amount } } });
+  await logEvent(p.id, 'sales.accept', { note: String(p.price.amount) });
+  await asBot(() => doAdvance(p));
+  return p.price.amount;
+}
+
+// Negotiator / admin offer. The api refuses anything below the floor for them.
+export async function saveQuote(projectId, amount, { reason = '' } = {}) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  if (!['negotiator', 'admin', 'owner', 'salesbot'].includes(role)) throw new PermissionError('quote.save');
+  assertCan(user, role, 'project.price', p);
+  if (p.stage !== 4) throw new ApiError('sales.nothingToDo');
+  const q = await saveQuoteAs(p, role, Math.round(Number(amount)), { reason });
+  await postMessage(p, { type: 'quote', by: { user, role }, content: { key: 'sales.offerMsg', params: { amount: q.amount } }, buttons: ['accept', 'counter'] });
+  return q;
+}
+
+// Below the floor: only the Owner, with a reason.
+export async function requestBelowFloor(projectId, amount, reason) {
+  const { user, role } = requireDesk();
+  if (!String(reason || '').trim()) throw new ApiError('override.reasonNeeded');
+  const p = await rawProject(projectId);
+  const id = db.uid('ap');
+  await write('approvals', {
+    id, project_id: p.id, stage: p.stage, gate_key: 'price.belowFloor', amount: Math.round(Number(amount)), reason,
+    by: user.id, role, method: 'pin', time_device: Date.now(), time_server: null,
+  });
+  await logEvent(p.id, 'sales.belowFloorAsk', { note: reason, loud: true });
+  return id;
+}
+
+export async function listPriceRequests() {
+  const { role } = requireLogin();
+  if (!['owner', 'admin', 'negotiator'].includes(role)) return [];
+  const all = await db.getAll('approvals');
+  const decided = new Set(all.filter((a) => a.gate_key === 'price.belowFloor.decision').map((a) => a.request_id));
+  const pending = all.filter((a) => a.gate_key === 'price.belowFloor' && !decided.has(a.id));
+  const out = [];
+  for (const a of pending) {
+    const p = await rawProject(a.project_id);
+    // Owner sees how far below the floor; others only that it is waiting.
+    out.push({ ...a, code: p.code, floor: role === 'owner' ? p.costing.floor : undefined });
+  }
+  return out;
+}
+
+export async function decidePriceRequest(requestId, approve) {
+  const { user, role } = requireLogin();
+  if (role !== 'owner') throw new PermissionError('price.belowFloor');
+  const req = await db.get('approvals', requestId);
+  if (!req || req.gate_key !== 'price.belowFloor') throw new ApiError('error.notFound');
+  const p = await rawProject(req.project_id);
+  await write('approvals', {
+    id: db.uid('ap'), project_id: p.id, stage: p.stage, gate_key: 'price.belowFloor.decision', request_id: requestId, approve,
+    by: user.id, role, method: 'pin', time_device: Date.now(), time_server: null,
+  });
+  if (approve) {
+    await saveQuoteAs(p, 'owner', req.amount, { reason: req.reason });
+    await postMessage(p, { type: 'quote', by: { user, role }, content: { key: 'sales.offerMsg', params: { amount: req.amount } }, buttons: ['accept', 'counter'] });
+  }
+  await logEvent(p.id, approve ? 'sales.belowFloorYes' : 'sales.belowFloorNo', { note: req.reason, loud: true });
+}
+
+// Silent customers: a reminder every 24 h, after 3 reminders the lead goes "cold" and returns to the rider.
+export async function salesTick(now = Date.now()) {
+  requireLogin();
+  const all = await db.getAll('projects');
+  let changed = 0;
+  for (const p of all) {
+    const waitingOnCustomer = (p.stage === 3 && p.sales?.whatsapp_sent && p.sales?.reply !== 'interested')
+      || (p.stage === 4 && p.price && !p.price.accepted && !p.flags?.handoff);
+    if (!waitingOnCustomer || p.flags?.cold) continue;
+    const silent = now - (p.sales?.last_contact || p.stage_since);
+    if (silent < 24 * HOUR) continue;
+    const reminders = p.sales?.reminders || 0;
+    await asBot(async () => {
+      if (reminders >= 3) {
+        p.flags = { ...(p.flags || {}), cold: true, cold_time: now };
+        await db.put('projects', p);
+        await postMessage(p, { type: 'bot', content: { key: 'bot.cold', params: {} } });
+        await logEvent(p.id, 'sales.cold');
+      } else {
+        p.sales = { ...(p.sales || {}), reminders: reminders + 1, last_contact: now };
+        await db.put('projects', p);
+        await postMessage(p, { type: 'bot', content: { key: 'bot.reminder', params: { n: reminders + 1 } } });
+        await logEvent(p.id, 'bot.reminder', { note: String(reminders + 1) });
+      }
+    });
+    changed += 1;
+  }
+  if (changed) emit('data');
+  return changed;
+}
+
+// Demo: pretend one silent day passed for this lead, then run the reminder check.
+export async function simulateSilentDay(projectId) {
+  requireDesk();
+  if (!isDemo()) throw new PermissionError('demo.only');
+  const p = await rawProject(projectId);
+  p.sales = { ...(p.sales || {}), last_contact: (p.sales?.last_contact || Date.now()) - 25 * HOUR };
+  await db.put('projects', p);
+  return salesTick();
+}
+
+// Pipeline for the desk: leads by score, hand-offs, counts per stage, open value.
+export async function salesPipeline() {
+  requireDesk();
+  const list = await listProjects();
+  const weekAgo = Date.now() - 7 * 24 * HOUR;
+  const open = list.filter((p) => p.stage >= 2 && p.stage <= 4);
+  return {
+    leads: open.filter((p) => !p.flags?.handoff).map((p) => ({ ...p, score: leadScore(p) })).sort((a, b) => b.score - a.score),
+    handoffs: open.filter((p) => p.flags?.handoff),
+    counts: { 2: 0, 3: 0, 4: 0, 5: 0, ...Object.fromEntries([2, 3, 4, 5].map((n) => [n, list.filter((p) => p.stage === n).length])) },
+    openValue: open.filter((p) => p.stage === 4 && p.price).reduce((s, p) => s + p.price.amount, 0),
+    cold: list.filter((p) => p.flags?.cold).length,
+    wonThisWeek: list.filter((p) => p.price?.accepted && (p.price.accepted_time || 0) >= weekAgo).length,
+  };
 }
 
 // ---------- rider: duty, routes, lead capture ----------
@@ -891,7 +1244,7 @@ export async function findSiteNear(pos) {
   const all = await db.getAll('projects');
   const near = all.filter((p) => p.site?.lat != null && distanceM(pos, p.site) <= (p.site.geofence_m || GEOFENCE_M))
     .sort((a, b) => distanceM(pos, a.site) - distanceM(pos, b.site))[0];
-  return near ? { id: near.id, code: near.code, area: near.site.area } : null;
+  return near ? { id: near.id, code: near.code, area: near.site.area, own: near.lead?.rider_id === me.id } : null;
 }
 
 async function nextProjectNumber() {
@@ -913,7 +1266,15 @@ export async function captureLead({ shots, phone, consent, pos, address }) {
   const near = await findSiteNear(pos);
   let p;
   let duplicate = null;
-  if (near) {
+  let revisit = false;
+  if (near && (await rawProject(near.id)).lead?.rider_id === user.id) {
+    // Own lead again (e.g. a "revisit" pin after the customer went cold): fresh photos, back in the sales queue.
+    p = await rawProject(near.id);
+    revisit = true;
+    p.flags = { ...(p.flags || {}), cold: false };
+    p.sales = { ...(p.sales || {}), reminders: 0, last_contact: now };
+    if (phone && phone !== p.contact?.phone) p.contact = { ...p.contact, phone_alt: phone };
+  } else if (near) {
     p = await rawProject(near.id);
     const oldPhotos = (await db.getByIndex('evidence', 'project_id', p.id)).filter((e) => e.step_key.startsWith('lead.')).length;
     const addsNew = (!!phone && phone !== p.contact?.phone) || oldPhotos < 3 || now - (p.created || now) > 30 * DAY_MS;
@@ -940,25 +1301,29 @@ export async function captureLead({ shots, phone, consent, pos, address }) {
   // Consent clip (the site contact's spoken "yes") is evidence too.
   let clipId = null;
   if (consent?.clip) clipId = await saveFile(consent.clip, { kind: 'consent', project_id: p.id, owner_id: user.id });
-  if (!duplicate) p.lead.consent = { type: consent?.type || 'tap', clip_id: clipId, time: now };
-  else duplicate.consent = { type: consent?.type || 'tap', clip_id: clipId, time: now };
+  if (duplicate) duplicate.consent = { type: consent?.type || 'tap', clip_id: clipId, time: now };
+  else if (revisit) p.lead.revisit_consent = { type: consent?.type || 'tap', clip_id: clipId, time: now };
+  else p.lead.consent = { type: consent?.type || 'tap', clip_id: clipId, time: now };
   await db.put('projects', p);
   await queue('projects', p.id, near ? 'lead.update' : 'lead.create');
+  const isUpdate = !!duplicate || revisit;
 
   const evIds = [];
   for (const s of shots) {
     const fileId = await saveFile(s.blob, { kind: 'site', project_id: p.id, sha256: s.sha256 });
     const rec = {
-      id: db.uid('ev'), project_id: p.id, stage: duplicate ? p.stage : 1, step_key: duplicate ? `lead.update.${s.step.split('.')[1]}` : s.step,
+      id: db.uid('ev'), project_id: p.id, stage: isUpdate ? p.stage : 1, step_key: isUpdate ? `lead.update.${s.step.split('.')[1]}` : s.step,
       by: user.id, role, sha256: s.sha256, files: [{ file_id: fileId, sha256: s.sha256, type: s.blob.type }], stamp: s.stamp, ai: s.ai || null,
       review: null, assisted_by: session.assistedBy?.id || null, time_device: now, time_server: null,
     };
     await write('evidence', rec);
     evIds.push(rec.id);
   }
-  await logEvent(p.id, duplicate ? 'lead.update' : 'lead.capture', { proof_ids: evIds, note: duplicate ? (duplicate.adds_new ? 'adds_new' : 'no_new') : '' });
+  await logEvent(p.id, revisit ? 'lead.revisit' : duplicate ? 'lead.update' : 'lead.capture', {
+    proof_ids: evIds, note: duplicate ? (duplicate.adds_new ? 'adds_new' : 'no_new') : '',
+  });
 
-  if (!duplicate) {
+  if (!isUpdate) {
     // System checks for stage 2: AI photo check and geofence (photos taken where the site is).
     p.lead.ai_check = shots.every((s) => s.ai?.result === 'pass') ? 'pass' : 'review';
     p.lead.in_geofence = shots.every((s) => distanceM(s.stamp, p.site) <= GEOFENCE_M);
@@ -972,7 +1337,7 @@ export async function captureLead({ shots, phone, consent, pos, address }) {
     }
   }
   emit('data');
-  return { projectId: p.id, code: p.code, duplicate: !!duplicate, addsNew: duplicate?.adds_new ?? null };
+  return { projectId: p.id, code: p.code, duplicate: !!duplicate, revisit, addsNew: duplicate?.adds_new ?? null };
 }
 
 // Fill "address pending" once the phone is back online (called by the app on reconnect).

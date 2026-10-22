@@ -291,3 +291,65 @@ test.describe('rider helpers', () => {
     for (const w of NEW) expect(src).toContain(`'${w}'`);
   });
 });
+
+test.describe('price engine', () => {
+  test('base 100 → 160 first quote, 130 bot limit, 120 floor', async () => {
+    const { priceAt, FIRST_LEVEL, BOT_LIMIT, FLOOR_LEVEL, botLadder } = await import('../js/pricing.js');
+    expect(priceAt(100, FIRST_LEVEL)).toBe(160);
+    expect(priceAt(100, BOT_LIMIT)).toBe(130);
+    expect(priceAt(100, FLOOR_LEVEL)).toBe(120);
+    expect(botLadder(100)).toEqual([160, 150, 140, 130]);
+  });
+  test('role limits: bot ≥ 1.30, negotiator/admin ≥ 1.20, owner below only with a reason', async () => {
+    const { quoteAllowed } = await import('../js/pricing.js');
+    expect(quoteAllowed('salesbot', 130, 100)).toBe(true);
+    expect(quoteAllowed('salesbot', 129, 100)).toBe(false);
+    expect(quoteAllowed('negotiator', 120, 100)).toBe(true);
+    expect(quoteAllowed('negotiator', 119, 100)).toBe(false);
+    expect(quoteAllowed('admin', 119, 100)).toBe(false);
+    expect(quoteAllowed('owner', 110, 100)).toBe(false);
+    expect(quoteAllowed('owner', 110, 100, 'repeat builder, 5 lifts')).toBe(true);
+    expect(quoteAllowed('customer', 200, 100)).toBe(false);
+  });
+  test('bot goes one step per counter-offer, asks something back, hands off below its limit', async () => {
+    const { botCounter } = await import('../js/pricing.js');
+    let r = botCounter({ base: 100, currentLevel: 1.6, counter: 100, step: 0 });
+    expect(r).toMatchObject({ action: 'offer', amount: 150, ask: 'token_today' });
+    r = botCounter({ base: 100, currentLevel: 1.5, counter: 100, step: 1 });
+    expect(r).toMatchObject({ action: 'offer', amount: 140, ask: 'refer_site' });
+    r = botCounter({ base: 100, currentLevel: 1.4, counter: 100, step: 2 });
+    expect(r).toMatchObject({ action: 'offer', amount: 130, ask: 'sign_amc' });
+    expect(botCounter({ base: 100, currentLevel: 1.3, counter: 100 }).action).toBe('handoff');
+    // A counter above the next step is met at the customer's number.
+    expect(botCounter({ base: 100, currentLevel: 1.6, counter: 155 })).toMatchObject({ action: 'offer', amount: 155 });
+    // A counter at or above the current offer is accepted at the current offer.
+    expect(botCounter({ base: 100, currentLevel: 1.5, counter: 150 })).toMatchObject({ action: 'accept', amount: 150 });
+  });
+  test('rate card: more floors cost more, manual and MS cost less', async () => {
+    const { baseCost } = await import('../js/pricing.js');
+    const a = baseCost({ floors: 5, type: 'automatic', finish: 'SS' });
+    expect(baseCost({ floors: 8, type: 'automatic', finish: 'SS' })).toBeGreaterThan(a);
+    expect(baseCost({ floors: 5, type: 'manual', finish: 'SS' })).toBeLessThan(a);
+    expect(baseCost({ floors: 5, type: 'automatic', finish: 'MS_powder' })).toBeLessThan(a);
+    expect(baseCost({ floors: 5, type: 'automatic', finish: 'SS', access: 2 })).toBeGreaterThan(a);
+    expect(a % 1000).toBe(0);
+  });
+  test('payment milestones always add up to the price', async () => {
+    const { paymentSchedule } = await import('../js/pricing.js');
+    expect(paymentSchedule(1000000).map((r) => r.amount)).toEqual([10000, 690000, 200000, 100000]);
+    for (const price of [1000000, 937500, 751234, 1450500]) {
+      for (const tokenFromDelivery of [true, false]) {
+        const rows = paymentSchedule(price, { token: 10000, tokenFromDelivery });
+        expect(rows.reduce((s, r) => s + r.amount, 0)).toBe(price);
+      }
+    }
+  });
+  test('lead score favours checked, multi-reported, fresh leads', async () => {
+    const { leadScore } = await import('../js/pricing.js');
+    const now = Date.now();
+    const fresh = leadScore({ created: now, lead: { ai_check: 'pass', duplicates: [{}] } }, now);
+    const old = leadScore({ created: now - 20 * 86400000, lead: { ai_check: 'review', duplicates: [] } }, now);
+    expect(fresh).toBeGreaterThan(old);
+    expect(leadScore({ created: now, lead: {}, flags: { cold: true } }, now)).toBeLessThan(50);
+  });
+});

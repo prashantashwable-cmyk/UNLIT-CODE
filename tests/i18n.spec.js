@@ -12,7 +12,7 @@ async function strayWords(page) {
 }
 
 for (const lang of ['mr', 'hi']) {
-  for (const id of ['u_r1', 'u_tech1', 'u_c1', 'u_admin', 'u_owner', 'u_s1', 'u_qc1', 'u_app1']) {
+  for (const id of ['u_r1', 'u_tech1', 'u_c1', 'u_admin', 'u_owner', 'u_s1', 'u_qc1', 'u_app1', 'u_neg']) {
     test(`${lang}: every tab fully translated for ${id}`, async ({ page }) => {
       const errors = watchErrors(page);
       await startDemo(page, id, { lang });

@@ -151,7 +151,7 @@ button.card { cursor: pointer; font: inherit; }
 .coin-stack svg { width: calc(var(--s) * 40px); height: calc(var(--s) * 70px); min-width: 28px; min-height: 48px; }
 .money-text { flex: 1; min-width: 0; }
 .money-label { color: var(--muted); font-weight: 600; font-size: var(--fs-sm); }
-.money-digits { font-size: var(--fs-xl); font-weight: 800; letter-spacing: .01em; color: var(--text); overflow-wrap: anywhere; }
+.money-digits { font-size: min(var(--fs-xl), 8.5vw); font-weight: 800; letter-spacing: .01em; color: var(--text); white-space: nowrap; }
 .bucket .money-digits { font-size: var(--fs-lg); }
 .bucket-name { display: flex; align-items: center; gap: 8px; font-weight: 700; }
 .chain { display: flex; flex-wrap: wrap; gap: 4px; list-style: none; padding: 0; margin: 8px 0 0; }
@@ -389,3 +389,24 @@ button.card { cursor: pointer; font: inherit; }
 .lg-suggest { border: 2px dashed #1b7a34; }
 .pin-pop { display: grid; gap: 4px; min-width: 140px; }
 .pin-photo { width: 160px; border-radius: 8px; }
+
+/* ---------- sales ---------- */
+.sales-panel { padding: var(--pad); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); border: 1px solid var(--card-border); margin-bottom: var(--gap); }
+.sales-panel .section-title { margin-top: 0; }
+.wa-preview { margin-bottom: var(--gap); }
+.wa-preview summary { min-height: 48px; display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 700; }
+.wa-bubble { background: #dcf8c6; color: #102010; border-radius: 12px 12px 12px 2px; padding: 8px 12px; margin: 6px 0; }
+.wa-bubble small { font-weight: 700; opacity: .7; }
+.quote-hist { list-style: none; margin: 0; padding: 0; }
+.quote-hist li { display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.quote-hist li strong { margin-left: auto; }
+.quote-hist .qh-customer { color: var(--t-info); }
+.seg { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.req-floors { font-size: var(--fs-lg); font-weight: 800; min-width: 64px; text-align: center; }
+.rupee { font-weight: 800; font-size: var(--fs-lg); }
+.handoff-chat { margin: 8px 0; padding: 8px; border-radius: 10px; background: var(--c-neutral); color: var(--on-neutral); font-size: var(--fs-sm); }
+.hc-line { padding: 2px 0; }
+.score { float: right; display: inline-grid; place-items: center; min-width: 40px; height: 40px; border-radius: 50%; background: var(--c-info); color: var(--on-info); font-weight: 800; }
+.ride-stats.four { grid-template-columns: repeat(4, 1fr); }
+.ride-stats.four small { font-size: max(11px, calc(var(--s) * 12px)); }
+.sales-msg { display: flex; gap: 6px; align-items: flex-start; }

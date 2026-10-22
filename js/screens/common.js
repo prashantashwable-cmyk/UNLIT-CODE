@@ -1,5 +1,5 @@
 // Small view helpers shared by several screens.
-import { t, L } from '../i18n.js';
+import { t, L, formatINR } from '../i18n.js';
 import { h, statusDot, progressBar, card } from '../ui.js';
 import { icon } from '../icons.js';
 import { progressPct } from '../stages.js';
@@ -28,7 +28,18 @@ export function sectionTitle(text, iconName) {
   return h('h2', { class: 'section-title' }, iconName ? icon(iconName) : null, text);
 }
 
-// Translate seeded message keys ("seed.chat.x"), else return the text as typed.
-export function msgText(s) {
-  return typeof s === 'string' && s.startsWith('seed.') ? t(s) : s;
+// Message text: {key, params} objects and seeded "seed.x" keys are translated; typed text stays as typed.
+export function msgText(c, lang) {
+  if (c && typeof c === 'object' && c.key) {
+    const params = {};
+    for (const [k, v] of Object.entries(c.params || {})) {
+      if (k === 'amount' && typeof v === 'number') params[k] = formatINR(v);
+      else if (k === 'ask') params[k] = t(`ask.${v}`, null, lang);
+      else if (k === 'type' || k === 'finish') params[k] = t(`spec.${v}`, null, lang);
+      else if (v && typeof v === 'object') params[k] = lang ? (v[lang] || v.en) : L(v);
+      else params[k] = v;
+    }
+    return t(c.key, params, lang);
+  }
+  return typeof c === 'string' && c.startsWith('seed.') ? t(c) : c;
 }

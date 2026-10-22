@@ -5,10 +5,13 @@ import { t, L } from '../i18n.js';
 import { h, card, statusDot, emptyState } from '../ui.js';
 import { createMap, statusPin, fitTo } from '../map.js';
 import { sectionTitle, stageName } from './common.js';
+import { leadScore } from '../pricing.js';
 
 export default async function mapview(ctx) {
   if (ctx.role === 'rider') return (await import('./rider/map.js')).default(ctx);
   const projects = (await api.listProjects()).filter((p) => p.site?.lat != null);
+  // Sales sees open leads sorted by score.
+  if (ctx.role === 'negotiator') projects.sort((a, b) => (b.stage <= 4) - (a.stage <= 4) || leadScore(b) - leadScore(a));
   const mapEl = h('div', { class: 'map', 'data-testid': 'map', role: 'application', 'aria-label': t('tab.map') });
   const legend = h('div', { class: 'legend' }, ['green', 'yellow', 'red'].map((c) => h('span', {}, statusDot(c), t(`status.${c}`))));
   const list = h('div', { class: 'map-list' }, projects.map((p) => card([
