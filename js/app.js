@@ -8,6 +8,7 @@ import { autoSpeak, speak, stopSpeaking } from './voice.js';
 import { unlockAudio } from './feedback.js';
 import { isStandalone, captureInstallPrompt } from './screens/install.js';
 import { openHelp } from './screens/help.js';
+import { reverseGeocode } from './geo.js';
 
 const SCREENS = {
   welcome: () => import('./screens/install.js').then((m) => m.welcomeScreen),
@@ -184,6 +185,18 @@ async function updateOfflineBadge() {
   el.replaceChildren(icon(offline ? 'offline' : 'sync'), h('span', {}, offline ? t('offline.saved', { n }) : t('offline.sending', { n })));
 }
 
+// Riders: fill "address pending" for leads captured offline once the network is back.
+async function fillPendingAddresses() {
+  if (api.currentRole() !== 'rider' || !navigator.onLine) return;
+  try {
+    for (const p of await api.pendingAddresses()) {
+      const address = await reverseGeocode(p.lat, p.lng, getLang());
+      if (!navigator.onLine) return;
+      await api.setSiteAddress(p.id, address);
+    }
+  } catch (e) { console.warn(e); }
+}
+
 // ---------- boot ----------
 
 function blockFileInput() {
@@ -227,6 +240,8 @@ async function boot() {
     else if (what === 'outbox') updateOfflineBadge();
   });
   window.addEventListener('online', updateOfflineBadge);
+  window.addEventListener('online', fillPendingAddresses);
+  fillPendingAddresses();
   window.addEventListener('offline', updateOfflineBadge);
   document.addEventListener('visibilitychange', () => { if (document.hidden) flushUndo(); });
   window.addEventListener('pagehide', flushUndo);

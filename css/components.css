@@ -356,3 +356,36 @@ button.card { cursor: pointer; font: inherit; }
 .table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); background: var(--card); border-radius: var(--radius-sm); }
 .table th, .table td { padding: 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
 .table th:first-child, .table td:first-child { text-align: left; }
+
+/* ---------- rider ---------- */
+.flow-screen { position: fixed; inset: 0; height: 100vh; height: 100dvh; z-index: 100; background: var(--bg); color: var(--text); display: flex; flex-direction: column; overflow: auto; }
+.flow-screen .cam-top { background: var(--card-solid); border-bottom: 1px solid var(--line); }
+.flow-screen .cam-top .icon-btn { background: var(--card-solid); color: var(--text); border-color: var(--line); }
+.flow-body { padding: var(--pad); max-width: 560px; width: 100%; margin: 0 auto; text-align: center; }
+.flow-photo { max-height: 28vh; border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+.consent-q { display: grid; justify-items: center; gap: 8px; padding: var(--pad); border-radius: var(--radius); background: var(--card); margin-bottom: var(--gap); }
+.speedo { text-align: center; padding: var(--pad); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); }
+.speed-row { display: flex; align-items: baseline; justify-content: center; gap: 8px; }
+.speed-num { font-size: calc(var(--s) * 84px); font-weight: 900; line-height: 1; }
+.speed-unit { font-size: var(--fs-lg); font-weight: 700; color: var(--muted); }
+.speed-state { margin-top: 8px; padding: 8px; border-radius: 999px; font-weight: 800; }
+.ride-stats { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); margin-top: var(--gap); }
+.ride-stats .card { margin: 0; display: grid; text-align: center; }
+.ride-stats strong { font-size: var(--fs-xl); }
+.demo-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: var(--gap); }
+.demo-tag { background: var(--ribbon); color: var(--on-ribbon); font-weight: 800; padding: 2px 8px; border-radius: 6px; font-size: var(--fs-sm); }
+.lb { list-style: none; padding: 0; margin: 0; }
+.lb-row { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--line); }
+.lb-row:last-child { border-bottom: 0; }
+.lb-row.me { font-weight: 800; background: rgba(30, 91, 184, .08); border-radius: 10px; }
+.lb-rank { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--c-neutral); font-weight: 800; }
+.lb-name { flex: 1; }
+.lb-stat { display: inline-flex; align-items: center; gap: 2px; min-width: 44px; justify-content: flex-end; }
+.summary { display: grid; gap: 6px; }
+.lg { display: inline-block; width: 18px; height: 12px; border-radius: 3px; }
+.lg-route { background: #1e5bb8; height: 4px; }
+.lg-mine { background: rgba(30, 91, 184, .3); border: 1px solid #1e5bb8; }
+.lg-others { background: rgba(138, 143, 152, .4); border: 1px solid #8a8f98; }
+.lg-suggest { border: 2px dashed #1b7a34; }
+.pin-pop { display: grid; gap: 4px; min-width: 140px; }
+.pin-photo { width: 160px; border-radius: 8px; }

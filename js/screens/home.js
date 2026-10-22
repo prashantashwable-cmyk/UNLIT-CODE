@@ -15,7 +15,9 @@ async function earnText(role, step) {
   return null;
 }
 
-export default async function home({ role, user, refresh }) {
+export default async function home(ctx) {
+  if (ctx.role === 'rider') return (await import('./rider/today.js')).default(ctx);
+  const { role, user, refresh } = ctx;
   const group = roleGroup(role);
   const node = h('div', { class: 'today' });
   let voice;

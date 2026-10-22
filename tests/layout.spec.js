@@ -29,9 +29,9 @@ test('field screens: touch targets at least 64 px even at 20% scale; primary but
   const page = await ctx.newPage();
   await page.addInitScript(() => { if (!localStorage.getItem('aiec.prefs')) localStorage.setItem('aiec.prefs', '{"autoVoice":false,"scale":20}'); });
   await startDemo(page, 'u_r1');
-  const primary = await page.getByTestId('primary-action').boundingBox();
+  const primary = await page.getByTestId('start-day').boundingBox();
   expect(primary.height).toBeGreaterThanOrEqual(760 * 0.3 - 1);
-  await page.getByTestId('primary-action').click();
+  await page.getByTestId('project-p0001').click();
   const take = await page.getByTestId('capture-lead.board').boundingBox();
   expect(take.height).toBeGreaterThanOrEqual(64);
   await ctx.close();

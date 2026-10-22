@@ -5,6 +5,8 @@
 | Spec item | Web limit | What the app does |
 |---|---|---|
 | Location tracking with the phone locked | Web apps are suspended when the screen is off or the app is in the background. | Screen Wake Lock during duty, tracking only while open (Phase 2), "phone went silent" flag after 30 min. **Reliable locked-screen tracking needs the native Android wrapper (Capacitor / TWA).** |
+| Speed while riding | GPS speed is only available while the app is open; demo browsers have no real GPS. | Speed from `coords.speed` or from consecutive fixes; demo mode has "Ride / Stop" chips to simulate speed. |
+| OCR on cheap phones | Tesseract runs in WebAssembly (≈7 MB, a few seconds on slow phones). | Downloaded in the background after install; the board number is only a suggestion – the rider confirms with one tap, or uses the number pad / voice if OCR finds nothing. |
 | Mock location / rooted phone detection | Not visible to web pages. | Flags suspicious jumps > 150 km/h between points (`geo.speedKmh`), GPS accuracy > 100 m → retake, photo/GPS time gap > 10 min → flag. |
 | Face match | No on-device face recognition API. | Liveness by frame difference ("turn your head"), selfie stored; `api.faceMatch()` is the single plug-in point for a real face-match API. Demo accepts any live selfie of an enrolled person. |
 | Full screen at start | Browsers allow it only after a tap. | Requested on the first tap, only in the installed app. Manifest also asks for `fullscreen`. |
@@ -27,4 +29,6 @@
 4. **"12 projects spread across all 16 stages."** 12 projects cannot cover 16 stages; they cover 12 different stages including every special case listed.
 5. **Chat storage.** The data model puts `messages[]` inside `chats`; because "all chat is evidence", messages are stored in their own **append-only** `messages` store instead.
 6. **Yellow status.** Yellow means both "waiting for someone" and "within the last 25 % of the time limit"; both trigger yellow.
-7. **Tesseract / jsPDF / qrcode** are vendored in the phases that use them (2, 6, 7), not in Phase 1.
+7. **jsPDF / qrcode** are vendored in the phases that use them (6, 7). Tesseract was added in Phase 2.
+8. **"Address from GPS" when the lookup fails online.** Nominatim can fail or rate-limit; the lead then uses the nearest Pune locality ("Near Wakad, Pune") so it is not stuck, and it is refined later. Offline it stays "address pending" (stage 1) until the phone is back online.
+9. **"Verified" lead.** Stage 2 checks (not duplicate, AI photo check, inside geofence) are computed at capture; the move 2 → 3 and the "verified lead" money belong to Sales (Phase 3).

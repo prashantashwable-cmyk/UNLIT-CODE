@@ -227,6 +227,8 @@ function noteFor(e) {
   }
   if (e.action === 'evidence.add') return t(`gate.${e.note}`);
   if (e.action === 'gate.approve') return t(`gatekey.${e.note}`);
+  if (e.action === 'lead.update') return t(`rider.update.${e.note}`);
+  if (e.action === 'lead.capture') return null;
   return e.note; // typed reason or bridge number
 }
 

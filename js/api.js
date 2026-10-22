@@ -9,8 +9,9 @@ import {
 import { checkGate, isStageOwner, nextStage, statusColour, stageDef } from './stages.js';
 import { bucketTotals } from './ledger.js';
 import { weightedRating } from './trust.js';
-import { lastKnownFix, setDemoMode } from './geo.js';
-import { seedDemo, DEFAULT_RULES } from './seed.js';
+import { lastKnownFix, setDemoMode, distanceM, GEOFENCE_M, speedKmh, SUSPICIOUS_KMH } from './geo.js';
+import { coveredHexes, routeKm, neighbours, hexId, hexCenter, HEX_AREA_KM2 } from './hex.js';
+import { seedDemo, DEFAULT_RULES, AREAS } from './seed.js';
 
 export { PermissionError };
 
@@ -471,7 +472,18 @@ async function moneyEvent(p, key) {
   }
   if (key === 'token' && p.lead?.rider_id) {
     await addLedger(p.lead.rider_id, p.id, 'rider.main', rules.rider_main_commission, 'provisional');
+    await payDuplicateRiders(p, rules);
   }
+}
+
+// Riders who attached a useful update to this site get a share of the main commission.
+async function payDuplicateRiders(p, rules) {
+  for (const d of p.lead?.duplicates || []) {
+    if (!d.adds_new || d.paid) continue;
+    await addLedger(d.rider_id, p.id, 'rider.duplicate', Math.round((rules.rider_main_commission * rules.duplicate_pct) / 100), 'provisional');
+    d.paid = true;
+  }
+  await db.put('projects', p);
 }
 
 async function addLedger(userId, projectId, source, amount, bucket) {
@@ -721,6 +733,272 @@ export async function nextStep() {
   const waiting = projects.filter((p) => p.stage < 16).sort((a, b) => rank[a.colour] - rank[b.colour])[0];
   if (waiting) return { project: waiting, kind: 'wait', waitingFor: stageDef(waiting.stage).owners };
   return null;
+}
+
+// ---------- rider: duty, routes, lead capture ----------
+
+const DAY_MS = 24 * 3600 * 1000;
+const dutyKey = (uid) => `duty:${uid}`;
+const startOfDayIST = (ts) => { const off = 5.5 * 3600 * 1000; return ts - ((ts + off) % DAY_MS); };
+
+function requireRider() {
+  const ctx = requireLogin();
+  if (ctx.role !== 'rider') throw new PermissionError('rider.only');
+  return ctx;
+}
+
+export async function getDuty() {
+  const { user } = requireLogin();
+  const rec = await db.get('settings', dutyKey(user.id));
+  return rec?.value?.active ? rec.value : null;
+}
+
+// Start day: face check first, then a new route for today.
+export async function startDuty(selfie) {
+  const { user } = requireRider();
+  if (!(await faceMatch(user, selfie))) throw new ApiError('login.faceFail');
+  const now = Date.now();
+  const route = { id: db.uid('route'), user_id: user.id, date: now, points: [], flags: [] };
+  await db.put('routes', route);
+  await db.put('settings', { key: dutyKey(user.id), value: { active: true, start: now, route_id: route.id, last_point: now } });
+  await audit('duty.start', { user_id: user.id });
+  return route.id;
+}
+
+// Points are kept only while on duty and the app is open. Jumps > 150 km/h are flagged.
+export async function addRoutePoint(fix) {
+  const { user } = requireRider();
+  const duty = await getDuty();
+  if (!duty) return null;
+  const route = await db.get('routes', duty.route_id);
+  const point = { lat: fix.lat, lng: fix.lng, time: fix.time || Date.now(), accuracy: fix.accuracy };
+  const prev = route.points[route.points.length - 1];
+  if (prev) {
+    if (distanceM(prev, point) < 15 && point.time - prev.time < 60000) return route; // ignore jitter
+    if (speedKmh(prev, point) > SUSPICIOUS_KMH) route.flags.push({ type: 'jump', time: point.time, kmh: Math.round(speedKmh(prev, point)) });
+  }
+  route.points.push(point);
+  await db.put('routes', route);
+  await db.put('settings', { key: dutyKey(user.id), value: { ...duty, last_point: point.time } });
+  return route;
+}
+
+// End day: summary of km, leads and money earned today.
+export async function endDuty() {
+  const { user } = requireRider();
+  const duty = await getDuty();
+  const summary = await daySummary();
+  if (duty) await db.put('settings', { key: dutyKey(user.id), value: { ...duty, active: false, end: Date.now(), summary } });
+  await audit('duty.end', { user_id: user.id });
+  return summary;
+}
+
+export async function daySummary(day = Date.now()) {
+  const { user } = requireRider();
+  const from = startOfDayIST(day);
+  const to = from + DAY_MS;
+  const routes = (await db.getByIndex('routes', 'user_id', user.id)).filter((r) => r.date >= from && r.date < to);
+  const km = routes.reduce((s, r) => s + routeKm(r.points), 0);
+  const leads = (await db.getAll('projects')).filter((p) => (p.lead?.rider_id === user.id && p.created >= from && p.created < to)
+    || (p.lead?.duplicates || []).some((d) => d.rider_id === user.id && d.time >= from && d.time < to)).length;
+  const earned = (await db.getByIndex('ledger', 'user_id', user.id)).filter((e) => e.time >= from && e.time < to && e.amount > 0)
+    .reduce((s, e) => s + e.amount, 0);
+  return { km: Math.round(km * 10) / 10, leads, earned };
+}
+
+// When the address lookup fails while online, the nearest locality (from GPS) is used.
+function approxAddress(pos) {
+  const a = nearestArea(pos).name;
+  return { en: `Near ${a.en}, Pune`, mr: `${a.mr} जवळ, पुणे`, hi: `${a.hi} के पास, पुणे` };
+}
+
+function nearestArea(pos) {
+  let best = null; let bestD = Infinity;
+  for (const a of Object.values(AREAS)) {
+    const d = distanceM(pos, a);
+    if (d < bestD) { bestD = d; best = a; }
+  }
+  return best;
+}
+
+// Map data for the rider: own routes and pins, own and others' covered hexes (no pins), suggestions.
+export async function riderMapData() {
+  const { user } = requireRider();
+  const weekAgo = Date.now() - 7 * DAY_MS;
+  const allRoutes = (await db.getAll('routes')).filter((r) => r.date >= weekAgo);
+  const mine = allRoutes.filter((r) => r.user_id === user.id);
+  const others = allRoutes.filter((r) => r.user_id !== user.id);
+  const myHexes = new Set();
+  mine.forEach((r) => coveredHexes(r.points).forEach((x) => myHexes.add(x)));
+  const otherHexes = new Set();
+  others.forEach((r) => coveredHexes(r.points).forEach((x) => { if (!myHexes.has(x)) otherHexes.add(x); }));
+  // Suggested: uncovered hexes around past wins (stage ≥ 5) – the site itself is never shown.
+  const wins = (await db.getAll('projects')).filter((p) => p.stage >= 5 && p.site?.lat != null);
+  const suggestions = new Set();
+  for (const p of wins) {
+    for (const id of neighbours(hexId(p.site), 2)) {
+      if (!myHexes.has(id) && !otherHexes.has(id)) suggestions.add(id);
+    }
+  }
+  const today = startOfDayIST(Date.now());
+  const todayRoute = mine.filter((r) => r.date >= today).flatMap((r) => r.points);
+  const leads = await listProjects();
+  return {
+    todayRoute,
+    weekRoutes: mine.map((r) => r.points),
+    myHexes: [...myHexes],
+    otherHexes: [...otherHexes],
+    suggestions: [...suggestions].slice(0, 24),
+    todayKm: Math.round(routeKm(todayRoute) * 10) / 10,
+    areaKm2: Math.round(myHexes.size * HEX_AREA_KM2 * 10) / 10,
+    leads,
+  };
+}
+
+// Morning card: suggested area, target and yesterday's earnings.
+export async function riderMorning() {
+  const { user } = requireRider();
+  const rules = await getRules();
+  const map = await riderMapData();
+  const home = user.home || AREAS.hinjewadi;
+  const pick = map.suggestions
+    .map((id) => hexCenter(id))
+    .sort((a, b) => distanceM(a, home) - distanceM(b, home))[0];
+  const yesterday = await daySummary(Date.now() - DAY_MS);
+  return { area: nearestArea(pick || home).name, target: rules.rider_daily_target, yesterdayEarned: yesterday.earned };
+}
+
+// Weekly leaderboard by verified leads and wins (not raw photos).
+export async function riderLeaderboard() {
+  const { role } = requireLogin();
+  if (!['rider', 'admin', 'owner'].includes(role)) throw new PermissionError('leaderboard');
+  const weekAgo = Date.now() - 7 * DAY_MS;
+  const [projects, users] = await Promise.all([db.getAll('projects'), db.getAll('users')]);
+  const rows = users.filter((u) => u.roles.includes('rider')).map((u) => {
+    const mine = projects.filter((p) => p.lead?.rider_id === u.id && (p.created >= weekAgo || p.stage_since >= weekAgo));
+    return {
+      id: u.id, name: u.name,
+      verified: mine.filter((p) => p.stage >= 3 || (p.stage === 2 && p.lead?.ai_check === 'pass')).length,
+      wins: mine.filter((p) => p.stage >= 5).length,
+    };
+  });
+  return rows.sort((a, b) => b.wins - a.wins || b.verified - a.verified);
+}
+
+// Is there already a project within the geofence of this spot?
+export async function findSiteNear(pos) {
+  requireRider();
+  const all = await db.getAll('projects');
+  const near = all.filter((p) => p.site?.lat != null && distanceM(pos, p.site) <= (p.site.geofence_m || GEOFENCE_M))
+    .sort((a, b) => distanceM(pos, a.site) - distanceM(pos, b.site))[0];
+  return near ? { id: near.id, code: near.code, area: near.site.area } : null;
+}
+
+async function nextProjectNumber() {
+  const all = await db.getAll('projects');
+  return all.reduce((m, p) => Math.max(m, Number(p.code.split('-').pop()) || 0), 0) + 1;
+}
+
+/**
+ * captureLead – one call from the 3-screen capture flow.
+ * shots: [{step, blob, sha256, stamp, ai}] (site, shaft, board); phone; consent {type, clip}; pos {lat,lng,accuracy}; address
+ * New site → new Project at stage 1 → moved to stage 2 when its gate is met.
+ * Within 50 m of an existing site → attached as an update to that Project.
+ */
+export async function captureLead({ shots, phone, consent, pos, address }) {
+  const { user, role } = requireRider();
+  if (!shots?.length || !pos) throw new ApiError('gate.notMet');
+  for (const s of shots) if (await hashUsed(s.sha256)) throw new ApiError('camera.duplicatePhoto');
+  const now = Date.now();
+  const near = await findSiteNear(pos);
+  let p;
+  let duplicate = null;
+  if (near) {
+    p = await rawProject(near.id);
+    const oldPhotos = (await db.getByIndex('evidence', 'project_id', p.id)).filter((e) => e.step_key.startsWith('lead.')).length;
+    const addsNew = (!!phone && phone !== p.contact?.phone) || oldPhotos < 3 || now - (p.created || now) > 30 * DAY_MS;
+    duplicate = { rider_id: user.id, time: now, adds_new: addsNew, phone: phone || null };
+    p.lead.duplicates = [...(p.lead.duplicates || []), duplicate];
+    if (addsNew && p.stage > 5) await payDuplicateRiders(p, await getRules());
+  } else {
+    const n = await nextProjectNumber();
+    p = {
+      id: `p${String(n).padStart(4, '0')}`, code: `AIEC-PUN-${String(n).padStart(4, '0')}`, stage: 1, stage_since: now, created: now,
+      site: {
+        lat: pos.lat, lng: pos.lng, geofence_m: GEOFENCE_M, area: nearestArea(pos).name,
+        // Offline: "address pending", filled when back online. Online but lookup failed: nearest locality.
+        address: address || (navigator.onLine ? approxAddress(pos) : null),
+        address_approx: !address && navigator.onLine,
+        address_pending: !address && !navigator.onLine,
+      },
+      contact: { name: { en: 'Site contact', mr: 'साईट संपर्क', hi: 'साइट संपर्क' }, phone },
+      lead: { rider_id: user.id, consent: null, duplicates: [], ai_check: null, in_geofence: null },
+      customer_id: null, spec: {}, costing: {}, quote_history: [], price: null, agreement: null, payments: [], emi: null,
+      permits: {}, container: { id: null, gps_track: [], lock_events: [] }, team: {}, install: {}, issues: [], amc: {}, flags: {},
+    };
+  }
+  // Consent clip (the site contact's spoken "yes") is evidence too.
+  let clipId = null;
+  if (consent?.clip) clipId = await saveFile(consent.clip, { kind: 'consent', project_id: p.id, owner_id: user.id });
+  if (!duplicate) p.lead.consent = { type: consent?.type || 'tap', clip_id: clipId, time: now };
+  else duplicate.consent = { type: consent?.type || 'tap', clip_id: clipId, time: now };
+  await db.put('projects', p);
+  await queue('projects', p.id, near ? 'lead.update' : 'lead.create');
+
+  const evIds = [];
+  for (const s of shots) {
+    const fileId = await saveFile(s.blob, { kind: 'site', project_id: p.id, sha256: s.sha256 });
+    const rec = {
+      id: db.uid('ev'), project_id: p.id, stage: duplicate ? p.stage : 1, step_key: duplicate ? `lead.update.${s.step.split('.')[1]}` : s.step,
+      by: user.id, role, sha256: s.sha256, files: [{ file_id: fileId, sha256: s.sha256, type: s.blob.type }], stamp: s.stamp, ai: s.ai || null,
+      review: null, assisted_by: session.assistedBy?.id || null, time_device: now, time_server: null,
+    };
+    await write('evidence', rec);
+    evIds.push(rec.id);
+  }
+  await logEvent(p.id, duplicate ? 'lead.update' : 'lead.capture', { proof_ids: evIds, note: duplicate ? (duplicate.adds_new ? 'adds_new' : 'no_new') : '' });
+
+  if (!duplicate) {
+    // System checks for stage 2: AI photo check and geofence (photos taken where the site is).
+    p.lead.ai_check = shots.every((s) => s.ai?.result === 'pass') ? 'pass' : 'review';
+    p.lead.in_geofence = shots.every((s) => distanceM(s.stamp, p.site) <= GEOFENCE_M);
+    await db.put('projects', p);
+    const gate = await gateFor(p);
+    if (gate.ok) {
+      p.stage = 2; p.stage_since = Date.now();
+      await db.put('projects', p);
+      await queue('projects', p.id, 'stage.advance');
+      await logEvent(p.id, 'stage.advance', { note: '1→2' });
+    }
+  }
+  emit('data');
+  return { projectId: p.id, code: p.code, duplicate: !!duplicate, addsNew: duplicate?.adds_new ?? null };
+}
+
+// Fill "address pending" once the phone is back online (called by the app on reconnect).
+export async function setSiteAddress(projectId, address) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  if (!isLeadRiderOf(user, p) && role !== 'admin') throw new PermissionError('site.address');
+  if (!p.site.address_pending && !p.site.address_approx) return;
+  p.site.address = address || approxAddress(p.site);
+  p.site.address_approx = !address;
+  p.site.address_pending = false;
+  await db.put('projects', p);
+  await queue('projects', p.id, 'site.address');
+  if (p.stage === 1 && (await gateFor(p)).ok) {
+    p.stage = 2; p.stage_since = Date.now();
+    await db.put('projects', p);
+    await logEvent(p.id, 'stage.advance', { note: '1→2' });
+  }
+}
+
+function isLeadRiderOf(user, p) { return p.lead?.rider_id === user.id; }
+
+export async function pendingAddresses() {
+  const { user } = requireLogin();
+  return (await db.getAll('projects')).filter((p) => (p.site?.address_pending || p.site?.address_approx) && p.lead?.rider_id === user.id)
+    .map((p) => ({ id: p.id, lat: p.site.lat, lng: p.site.lng }));
 }
 
 // ---------- demo reset ----------

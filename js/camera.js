@@ -113,11 +113,18 @@ function demoSource(kind, project) {
   const canvas = document.createElement('canvas');
   canvas.width = 960; canvas.height = 720;
   const ctx = canvas.getContext('2d');
-  const img = new Image();
-  const blob = svgPhoto(kind === 'face' ? 'selfie' : (['site', 'shaft', 'board', 'readiness', 'packing'].includes(kind) ? kind : 'site'),
-    { lat: 0, lng: 0, time: Date.now(), address: '', user: '', role: '', project: '', step: '' }, { phone: project?.demoBoardPhone || '', title: 'NEW BUILDING' });
-  const url = URL.createObjectURL(blob);
-  img.src = url;
+  let img = new Image();
+  let url = null;
+  const setScene = (k, phone = project?.demoBoardPhone || '') => {
+    const scene = k === 'face' ? 'selfie' : (['site', 'shaft', 'board', 'readiness', 'packing'].includes(k) ? k : 'site');
+    const blob = svgPhoto(scene, { lat: 0, lng: 0, time: Date.now(), address: '', user: '', role: '', project: '', step: '' }, { phone, title: 'NEW BUILDING' });
+    if (url) URL.revokeObjectURL(url);
+    url = URL.createObjectURL(blob);
+    const next = new Image();
+    next.onload = () => { img = next; };
+    next.src = url;
+  };
+  setScene(kind);
   let frame = 0; let raf = 0;
   const draw = () => {
     frame += 1;
@@ -135,7 +142,7 @@ function demoSource(kind, project) {
     raf = requestAnimationFrame(draw);
   };
   draw();
-  return { el: canvas, width: 960, height: 720, stop: () => { cancelAnimationFrame(raf); URL.revokeObjectURL(url); }, demo: true };
+  return { el: canvas, width: 960, height: 720, setScene, stop: () => { cancelAnimationFrame(raf); if (url) URL.revokeObjectURL(url); }, demo: true };
 }
 
 async function liveSource(facing) {
@@ -172,14 +179,19 @@ function frameDiff(a, b) {
 const toBlob = (canvas) => new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.85));
 
 /**
- * openCamera(opts) -> Promise<null | Array<{blob, sha256, stamp, liveness?}>>
+ * openCamera(opts) -> Promise<null | Array<{blob, sha256, stamp, step?, ai?, liveness?}>>
  * opts: {title, stepLabel, count, ghost, project, facing, liveness, requireGeofence, user, roleLabel, demo}
+ *   steps: [{key, label, ghost, scene}] – a burst where each shot has its own ghost outline
+ *   check: (stepKey) => {result:'pass'|'retake', reason} – AI step check after each shot
  */
 export function openCamera(opts) {
   const {
-    title, stepLabel = '', count = 1, ghost = 'site', project = null, facing = 'environment',
-    liveness = false, requireGeofence = false, user = '', roleLabel = '', demo = false, voice,
+    title, liveness = false, project = null, facing = 'environment', requireGeofence = false,
+    user = '', roleLabel = '', demo = false, voice, steps = null, check = null,
   } = opts;
+  const count = steps ? steps.length : (opts.count || 1);
+  const stepAt = (i) => (steps ? steps[Math.min(i, steps.length - 1)] : { key: null, label: opts.stepLabel || '', ghost: opts.ghost || 'site', scene: opts.sceneKind });
+  let { ghost } = stepAt(0);
   return new Promise((resolve) => {
     const shots = [];
     const hashes = new Set();
@@ -187,7 +199,12 @@ export function openCamera(opts) {
     let busy = false;
 
     const video = h('div', { class: 'cam-video' });
-    const ghostEl = h('div', { class: 'cam-ghost', html: `<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="3 2">${GHOSTS[ghost] || ''}</svg>` });
+    const ghostSvg = (g) => `<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="3 2">${GHOSTS[g] || ''}</svg>`;
+    const ghostEl = h('div', { class: 'cam-ghost', html: ghostSvg(ghost) });
+    const stepLabelEl = h('small', { 'data-testid': 'cam-step' }, stepAt(0).label);
+    const appealBtn = bigButton({ icon: 'twoPeople', label: t('ai.askPerson'), colour: 'yellow', small: true, testid: 'cam-appeal', onClick: () => appeal() });
+    appealBtn.hidden = true;
+    let rejected = null; // last shot the AI asked to retake
     const counter = h('div', { class: 'cam-count', 'data-testid': 'cam-count' });
     const thumbs = h('div', { class: 'cam-thumbs' });
     const status = h('div', { class: 'cam-status', role: 'status', 'aria-live': 'polite' });
@@ -200,19 +217,42 @@ export function openCamera(opts) {
     const overlay = h('div', { class: 'camera', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
       h('div', { class: 'cam-top' },
         iconButton('close', t('common.cancel'), () => finish(null), 'cam-close'),
-        h('div', { class: 'cam-title' }, title, stepLabel ? h('small', {}, stepLabel) : null),
+        h('div', { class: 'cam-title' }, title, stepLabelEl),
         speakerButton(promptText)),
       h('div', { class: 'cam-stage' }, video, ghostEl, demo ? h('div', { class: 'cam-demo-tag' }, t('camera.demoCamera')) : null),
       status,
-      h('div', { class: 'cam-bottom' }, thumbs, counter, shutter, doneBtn));
+      h('div', { class: 'cam-bottom' }, thumbs, counter, shutter, appealBtn, doneBtn));
 
     const updateCounter = () => {
       counter.textContent = `${shots.length} / ${count}`;
       const enough = shots.length >= count;
       doneBtn.hidden = !enough;
       shutter.hidden = enough;
-      if (enough) speak(t('camera.allDone'));
+      if (enough) { speak(t('camera.allDone')); return; }
+      const st = stepAt(shots.length);
+      if (steps) {
+        // Next shot in the burst: new outline, new label, spoken.
+        ghost = st.ghost;
+        ghostEl.innerHTML = ghostSvg(ghost);
+        stepLabelEl.textContent = st.label;
+        src?.setScene?.(st.scene || st.ghost);
+        if (shots.length) speak(st.label);
+      }
     };
+
+    // AI said retake, but the worker thinks the photo is fine: a person will check it. No points lost.
+    function appeal() {
+      if (!rejected) return;
+      shots.push({ ...rejected, ai: { ...rejected.ai, result: 'appeal' } });
+      thumbs.append(h('img', { src: URL.createObjectURL(rejected.blob), alt: t('camera.photoN', { n: shots.length }), class: 'cam-thumb' }));
+      rejected = null;
+      appealBtn.hidden = true;
+      status.className = 'cam-status c-yellow';
+      status.textContent = t('ai.appealSent');
+      speak(status.textContent);
+      feedback('waiting');
+      updateCounter();
+    }
 
     async function start() {
       document.body.append(overlay);
@@ -220,7 +260,7 @@ export function openCamera(opts) {
       try {
         src = await liveSource(facing);
       } catch {
-        if (demo) src = demoSource(ghost === 'face' ? 'face' : (opts.sceneKind || ghost), project);
+        if (demo) src = demoSource(ghost === 'face' ? 'face' : (stepAt(0).scene || ghost), project);
         else {
           status.className = 'cam-status c-red';
           status.textContent = t('camera.noCamera');
@@ -291,14 +331,26 @@ export function openCamera(opts) {
         ])) || (project?.site?.address ? L(project.site.address) : null);
         const stamp = {
           lat: pos.lat, lng: pos.lng, accuracy: pos.accuracy, address, address_pending: !address, time: now, gps_time: pos.time,
-          user, roleLabel, device: deviceModel(), project: project?.code || '', stepLabel, flags, simulated_gps: !!pos.simulated,
+          user, roleLabel, device: deviceModel(), project: project?.code || '', stepLabel: stepAt(shots.length).label, flags, simulated_gps: !!pos.simulated,
         };
+        const stepKey = stepAt(shots.length).key;
         await burnStamp(frame, stamp);
         const blob = await toBlob(frame);
         const hash = await sha256Hex(blob);
         if (hashes.has(hash)) { status.className = 'cam-status c-red'; status.textContent = t('camera.duplicatePhoto'); feedback('error'); return; }
         hashes.add(hash);
-        shots.push({ blob, sha256: hash, stamp, liveness: livenessOk });
+        const ai = check ? check(stepKey) : null;
+        if (ai?.result === 'retake') {
+          rejected = { blob, sha256: hash, stamp, step: stepKey, ai };
+          appealBtn.hidden = false;
+          status.className = 'cam-status c-red';
+          status.textContent = t('ai.retake', { reason: t(`ai.reason.${ai.reason}`) });
+          feedback('error'); speak(status.textContent);
+          return;
+        }
+        rejected = null;
+        appealBtn.hidden = true;
+        shots.push({ blob, sha256: hash, stamp, step: stepKey, ai, liveness: livenessOk });
         const url = URL.createObjectURL(blob);
         thumbs.append(h('img', { src: url, alt: t('camera.photoN', { n: shots.length }), class: 'cam-thumb' }));
         status.className = 'cam-status c-green'; status.textContent = t('camera.saved');

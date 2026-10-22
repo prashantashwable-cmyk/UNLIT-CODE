@@ -4,7 +4,7 @@ Installable, offline-first web app for AIEC (Pune): one Project record per lift,
 first lead photo to the last AMC visit. Built for people who cannot read well: every field
 screen **speaks first**, uses **pictures + colours**, big buttons and **zero typing**.
 
-> Status: **Phase 1 – Foundation** done (see "What's done"). Phases 2–9 follow, one at a time.
+> Status: **Phase 1 – Foundation** and **Phase 2 – Rider** done (see "What's done"). Phases 3–9 follow, one at a time.
 
 ## Run it
 
@@ -73,6 +73,27 @@ with resident tickets (0012). Ledger entries exist in every bucket and riders ha
 - Themes: Light Glass, Colour Glass, Outdoor (high contrast), Dark; UI scale slider 20–130 %.
 - 10-second Undo bar on every action; red Help button on every screen (chat or call me back).
 
+## What's done (Phase 2 – Rider)
+
+- **Start day**: selfie face check (liveness) → route tracking while the app is open (Screen Wake Lock,
+  resumes on reopen / `visibilitychange`, "On duty" notification when allowed, jumps > 150 km/h flagged).
+- **Morning card**: suggested area (uncovered zones near past wins), target leads, yesterday's earnings.
+- **Riding screen**: big speed, one big "Stopped? Capture lead" button – **locked while speed > 5 km/h**
+  ("Stop the bike first" spoken). Voice command "new lead" / "नवीन लीड" / "नई लीड". Demo chips simulate riding.
+- **Capture in 3 screens, zero typing**: (1) camera burst with ghost outlines – site, shaft, site board –
+  with AI photo check (retake with picture reason, or "ask a person"); (2) phone number read from the
+  board photo by **Tesseract OCR**, confirmed by one tap (or number pad / voice); (3) consent – the app
+  asks the WhatsApp question aloud, the contact's spoken "yes" is recorded, or they tap YES.
+  Auto address from GPS (offline → "address pending", filled when back online), 10-second Undo.
+  A complete lead moves itself to stage 2.
+- **Duplicate flow**: a capture within 50 m of an existing site warns "already with us" and attaches the
+  photos as an update to that Project; the updater gets 10 % of the main commission (at token) only if
+  the update adds something new.
+- **Rider map**: today's path, week routes, lead pins with photo thumbnails, area covered as ~300 m
+  hexagons, suggested areas (dashed), other riders' zones (grey, no pins or routes), day km and km².
+- **Leaderboard** (weekly, by verified leads and wins – not raw photos) and **End day** spoken summary
+  (km, leads, money earned today).
+
 ## Folder
 
 ```
@@ -82,13 +103,15 @@ js/         app.js i18n.js lang/{en,mr,hi}.js voice.js feedback.js theme.js pref
             db.js api.js permissions.js stages.js ledger.js trust.js camera.js geo.js
             map.js chat.js notify.js seed.js ui.js icons.js screens/*.js
 icons/      logo.svg, maskable.svg, PNG icons
-vendor/     leaflet/ (1.9.4), fonts/ (Noto Sans Devanagari 400/700, @fontsource 5.1.0)
+vendor/     leaflet/ (1.9.4), fonts/ (Noto Sans Devanagari 400/700, @fontsource 5.1.0),
+            tesseract/ (tesseract.js 5.1.1, core 5.1.1 LSTM, eng 4.0.0_best_int)
 tests/      Playwright tests (dev only)
 tools/      serve.mjs, gen-precache.mjs, make-icons.mjs, check-imports.mjs (dev only)
 ```
 
-Libraries for later phases (Tesseract.js – Phase 2, jsPDF – Phase 6, qrcode – Phase 7) are
-vendored in the phase that uses them, so the Phase 1 shell stays small.
+Libraries for later phases (jsPDF – Phase 6, qrcode – Phase 7) are vendored in the phase that
+uses them. Tesseract (≈7 MB) is cached by the service worker in the background after install, so the
+first load stays light.
 
 ## Tests
 
@@ -107,6 +130,8 @@ npx playwright test
 - `flows.spec.js` – stamp burnt into the saved JPEG, gate unlock + advance, Undo, offline outbox empties.
 - `i18n.spec.js` – Marathi and Hindi: no raw keys, no stray English words on any tab.
 - `layout.spec.js` – no sideways scroll at 360 / 768 / 1280 px; field targets ≥ 64 px at 20 % scale.
+- `rider.spec.js` – 3-screen capture with zero typing and real OCR, duplicate within 50 m attaches,
+  capture locked while moving, AI retake + appeal, end-day summary, rider map, offline address pending.
 - `pwa.spec.js` – Chrome installability check (no errors), works offline after first load, real-mode install gate.
 
 After editing shell files run `node tools/gen-precache.mjs` (a test fails if the list is stale).

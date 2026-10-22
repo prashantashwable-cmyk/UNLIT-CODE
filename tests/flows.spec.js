@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import { startDemo, api, watchErrors } from './helpers.js';
 
 async function takeBoardPhoto(page) {
-  await page.getByTestId('primary-action').click();
+  await page.getByTestId('project-p0001').click();
   await page.getByTestId('capture-lead.board').click();
   await page.getByTestId('cam-shutter').click();
   await page.getByTestId('cam-done').click({ timeout: 15000 });
@@ -44,7 +44,7 @@ test('camera stamp is burnt into the saved photo, with hash and GPS', async ({ p
 
 test('lead gate opens only after all proofs; undo cancels; advance moves stage', async ({ page }) => {
   await startDemo(page, 'u_r1');
-  await page.getByTestId('primary-action').click();
+  await page.getByTestId('project-p0001').click();
   // Locked while the board photo is missing.
   await expect(page.getByTestId('advance')).toHaveClass(/locked/);
   await page.getByTestId('capture-lead.board').click();
@@ -70,7 +70,7 @@ test('lead gate opens only after all proofs; undo cancels; advance moves stage',
 test('undo bar really cancels the action', async ({ page }) => {
   await startDemo(page, 'u_r1');
   await page.evaluate(() => localStorage.setItem('aiec.undoMs', '8000'));
-  await page.getByTestId('primary-action').click();
+  await page.getByTestId('project-p0001').click();
   await page.getByTestId('capture-lead.board').click();
   await page.getByTestId('cam-shutter').click();
   await page.getByTestId('cam-done').click({ timeout: 15000 });

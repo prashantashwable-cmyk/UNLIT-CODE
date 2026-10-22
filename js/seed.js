@@ -18,6 +18,7 @@ export const DEFAULT_RULES = {
   refund_rule: 'qc_reject_only',
   unpaid_return_hours: 2,
   technician_per_lift: 45000,
+  rider_daily_target: 5,
 };
 
 const N = (en, mr, hi) => ({ en, mr, hi });

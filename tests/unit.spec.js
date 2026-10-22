@@ -9,7 +9,7 @@ import { bucketTotals, moveEntries } from '../js/ledger.js';
 import en from '../js/lang/en.js';
 import mr from '../js/lang/mr.js';
 import hi from '../js/lang/hi.js';
-import { shellFiles } from '../tools/gen-precache.mjs';
+import { shellFiles, lazyFiles } from '../tools/gen-precache.mjs';
 
 const D = 24 * 3600 * 1000;
 const u = (id, roles) => ({ id, roles, status: 'active' });
@@ -252,6 +252,42 @@ test.describe('translations and hygiene', () => {
 
   test('service worker precaches every shell file', () => {
     const sw = fs.readFileSync('sw.js', 'utf8');
-    for (const f of shellFiles()) expect(sw, f).toContain(`'${f}'`);
+    for (const f of [...shellFiles(), ...lazyFiles()]) expect(sw, f).toContain(`'${f}'`);
+  });
+});
+
+test.describe('rider helpers', () => {
+  test('phone number from OCR text', async () => {
+    const { extractPhone } = await import('../js/ocr.js');
+    expect(extractPhone('NEW BUILDING\n9823456781\n')).toBe('9823456781');
+    expect(extractPhone('Call +91 98234 56781')).toBe('9823456781');
+    expect(extractPhone('0 9823456781')).toBe('9823456781');
+    expect(extractPhone('12345')).toBeNull();
+  });
+  test('hex grid: ~300 m cells, coverage and km', async () => {
+    const { hexId, hexCenter, coveredHexes, routeKm, neighbours, HEX_AREA_KM2 } = await import('../js/hex.js');
+    const p = { lat: 18.5913, lng: 73.7389 };
+    const id = hexId(p);
+    expect(hexId(hexCenter(id))).toBe(id);
+    const c = hexCenter(id);
+    expect(hexId({ lat: c.lat + 0.0003, lng: c.lng })).toBe(id); // 33 m from the centre: same cell
+    expect(hexId({ lat: c.lat + 0.004, lng: c.lng })).not.toBe(id); // 450 m away: another cell
+    expect(neighbours(id)).toHaveLength(6);
+    expect(neighbours(id, 2)).toHaveLength(18);
+    const route = [p, { lat: p.lat + 0.009, lng: p.lng }]; // ≈ 1 km north
+    expect(routeKm(route)).toBeCloseTo(1.0, 1);
+    expect(coveredHexes(route).size).toBeGreaterThanOrEqual(4);
+    expect(HEX_AREA_KM2).toBeCloseTo(0.078, 2);
+  });
+  test('AI check: forced modes and critical steps', async () => {
+    const { aiCheck } = await import('../js/aicheck.js');
+    expect(aiCheck({ rnd: () => 0.5 }).result).toBe('pass');
+    expect(aiCheck({ rnd: () => 0.01 }).result).toBe('retake');
+    expect(aiCheck({ critical: true, rnd: () => 0.9 }).review).toBe('qc');
+  });
+  test('voice command words in 3 languages', async () => {
+    const NEW = ['new lead', 'नवीन लीड', 'नई लीड'];
+    const src = fs.readFileSync('js/screens/rider/today.js', 'utf8');
+    for (const w of NEW) expect(src).toContain(`'${w}'`);
   });
 });

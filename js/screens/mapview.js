@@ -6,7 +6,8 @@ import { h, card, statusDot, emptyState } from '../ui.js';
 import { createMap, statusPin, fitTo } from '../map.js';
 import { sectionTitle, stageName } from './common.js';
 
-export default async function mapview() {
+export default async function mapview(ctx) {
+  if (ctx.role === 'rider') return (await import('./rider/map.js')).default(ctx);
   const projects = (await api.listProjects()).filter((p) => p.site?.lat != null);
   const mapEl = h('div', { class: 'map', 'data-testid': 'map', role: 'application', 'aria-label': t('tab.map') });
   const legend = h('div', { class: 'legend' }, ['green', 'yellow', 'red'].map((c) => h('span', {}, statusDot(c), t(`status.${c}`))));
