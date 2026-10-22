@@ -353,3 +353,28 @@ test.describe('price engine', () => {
     expect(leadScore({ created: now, lead: {}, flags: { cold: true } }, now)).toBeLessThan(50);
   });
 });
+
+test.describe('gates after a stage restarts', () => {
+  test('old proofs do not count once a project is sent back', () => {
+    const now = Date.now();
+    const p = { id: 'x', stage: 7, stage_since: now };
+    const old = { project_id: 'x', stage: 7, files: [{}], time_device: now - 1000 };
+    const evidence = [{ ...old, step_key: 'readiness.shaft' }, { ...old, step_key: 'readiness.power' }];
+    const approvals = [{ project_id: 'x', gate_key: 'readiness', role: 'customer', time_device: now - 1000 }];
+    expect(checkGate(p, { evidence, approvals }).ok).toBe(false);
+    const fresh = (x) => ({ ...x, time_device: now + 1 });
+    expect(checkGate(p, { evidence: evidence.map(fresh), approvals: approvals.map(fresh) }).ok).toBe(true);
+  });
+});
+
+test.describe('shaft drawing', () => {
+  test('dimensions from the measurements appear in the SVG', async () => {
+    const { shaftDrawing } = await import('../js/drawing.js');
+    const svg = shaftDrawing({ floors: 5, shaft_w: 1600, shaft_d: 1650, pit: 1250, headroom: 3700 }, { plan: 'P' });
+    expect(svg).toContain('1600 mm');
+    expect(svg).toContain('1650 mm');
+    expect(svg).toContain('1250');
+    expect(svg).toContain('G+5');
+    expect(svg.startsWith('<svg')).toBe(true);
+  });
+});

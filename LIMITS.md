@@ -15,6 +15,7 @@
 | Persistent "On duty" notification | Needs a push server / native code for true persistence. | System notification via the service worker when the app is in the background and permission is granted (Phase 2 adds the duty notification). |
 | Marathi voice | Many cheap phones have no Marathi TTS voice. | Falls back to a Hindi voice (reads Devanagari well); all text is still on screen with pictures. |
 | Speech recognition | Chrome/Android only; often needs network. | Mic buttons are hidden where unsupported; number pad and tap always work. |
+| Payments | A browser cannot confirm a real UPI payment by itself. | `js/payments.js` adapter: demo asks Success/Fail; a real aggregator (e.g. Razorpay Route) must confirm by server webhook before the payment is marked paid. |
 | SMS OTP, eSign, UPI, WhatsApp, masked calls | Need licensed providers. | Simulated in demo (OTP 123456, masked bridge number logged, etc.) behind api functions so real providers plug in. |
 | Map tiles offline | Tiles come from OpenStreetMap. | Every tile viewed is cached by the service worker (up to 1,500); the list of sites always works offline. |
 | Reverse geocoding | Nominatim needs network, max 1 request/s. | Queue with 1.1 s spacing + cache; offline photos say "Address pending" and use the project address. |
@@ -34,3 +35,6 @@
 9. **"Verified" lead.** Stage 2 checks (not duplicate, AI photo check, inside geofence) are computed at capture; the move 2 → 3 and the "verified lead" money belong to Sales (Phase 3).
 10. **Who runs the Sales Bot.** There is no server, so the bot acts when a desk user taps "Run sales bot", when the customer replies or counters, and when the desk opens (reminder catch-up). In demo mode the desk can also play the site contact's WhatsApp reply and "one silent day". Real WhatsApp/calls need the WhatsApp Business API and a telephony provider.
 11. **Bot meeting a counter-offer.** When a customer asks for more than the bot's next step, the bot offers the customer's number (still within its limit) instead of dropping further.
+12. **Self-approval for inspections.** "Whoever created evidence cannot approve it" is applied per gate to the evidence that gate checks (QC clearance checks the customer's readiness photos; QC/peer checks check installation photos). An inspector's own measurement photos are inspection records, so a QC can still photograph and approve the shaft.
+13. **Gates after a step back.** When a project goes back (QC rejects the site), only proofs made after it re-entered the stage count.
+14. **Agreement PDF.** The agreement is shown and read aloud in the app; the PDF version comes with the other PDFs in Phase 6 (jsPDF).

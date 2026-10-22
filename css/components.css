@@ -266,7 +266,7 @@ button.card { cursor: pointer; font: inherit; }
 .tl-item.loud .tl-note { color: var(--t-stop); font-weight: 700; }
 .pending-tag { color: var(--t-wait); font-weight: 700; }
 .input-row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
-.text-input { flex: 1; min-height: var(--tap); padding: 10px 14px; border-radius: var(--radius-sm); border: 2px solid var(--line); background: var(--card-solid); color: var(--text); font: inherit; }
+.text-input { flex: 1; min-width: 0; width: 100%; min-height: var(--tap); padding: 10px 14px; border-radius: var(--radius-sm); border: 2px solid var(--line); background: var(--card-solid); color: var(--text); font: inherit; }
 
 /* ---------- chat ---------- */
 .chat-preview { color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -410,3 +410,29 @@ button.card { cursor: pointer; font: inherit; }
 .ride-stats.four { grid-template-columns: repeat(4, 1fr); }
 .ride-stats.four small { font-size: max(11px, calc(var(--s) * 12px)); }
 .sales-msg { display: flex; gap: 6px; align-items: flex-start; }
+
+/* ---------- stage panels (agreement, permit, readiness, QC, drawings) ---------- */
+.stage-panel { padding: var(--pad); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow); border: 1px solid var(--card-border); margin-bottom: var(--gap); }
+.stage-panel .section-title { margin-top: 0; }
+.agr-steps { list-style: none; padding: 0; margin: 0 0 var(--gap); display: grid; gap: 6px; }
+.agr-steps li { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px; background: var(--c-neutral); color: var(--on-neutral); font-weight: 600; }
+.agr-steps li.done { background: var(--c-do); color: var(--on-do); }
+.agr-reader { text-align: left; }
+.agr-text { font-size: var(--fs-lg); line-height: 1.6; min-height: 30vh; }
+.agr-full summary { min-height: 48px; display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 700; }
+.agr-sec h3 { margin-bottom: 2px; }
+.upi-sheet { text-align: center; }
+.upi-logo { color: var(--t-do); }
+.check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin: var(--gap) 0; }
+.check-card { display: grid; justify-items: center; gap: 4px; padding: 10px; border-radius: var(--radius-sm); background: var(--card-solid); border: 1px solid var(--line); text-align: center; font-weight: 600; font-size: var(--fs-sm); }
+.check-card.fix { border: 3px solid var(--c-stop); }
+.check-pic { color: var(--text); }
+.sample-sop { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 10px; background: var(--c-wait); color: var(--on-wait); font-weight: 700; font-size: var(--fs-sm); }
+.measure .big-btn { width: auto; flex: 0 0 auto; }
+.qc-item { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.qc-item .choices { grid-column: 1 / -1; margin: 4px 0 0; }
+.qc-item.pass { background: linear-gradient(90deg, rgba(27,122,52,.08), transparent); }
+.qc-item.fail { background: linear-gradient(90deg, rgba(198,40,40,.1), transparent); }
+.qc-item-text { font-weight: 700; display: flex; align-items: center; gap: 6px; }
+.crit { color: var(--t-stop); }
+.drawing { color: var(--text); background: var(--card-solid); border-radius: var(--radius-sm); padding: 8px; overflow-x: auto; }

@@ -424,8 +424,16 @@ export async function reviewEvidence(evidenceId, result) {
 
 // ---------- gates and stages ----------
 
-// Gates that check somebody's work: the person who made the evidence may not approve.
-const CHECK_GATES = new Set(['qc.clearance', 'qc.surprise', 'qc.critical', 'qc.step', 'peer.check']);
+// Gates that check somebody's work, and the evidence steps they check.
+// Whoever made that evidence may not approve it (no self-approval). An inspector's own
+// measurement photos are inspection records, not the work being checked.
+const GATE_SUBJECT = {
+  'qc.clearance': ['readiness.'],
+  'qc.surprise': ['install.'],
+  'qc.critical': ['install.'],
+  'qc.step': ['install.'],
+  'peer.check': ['install.'],
+};
 
 export async function approveGate(projectId, gateKey, { method = 'face' } = {}) {
   const { user, role } = requireLogin();
@@ -434,10 +442,12 @@ export async function approveGate(projectId, gateKey, { method = 'face' } = {}) 
   const [evidence, approvals] = await Promise.all([
     db.getByIndex('evidence', 'project_id', p.id), db.getByIndex('approvals', 'project_id', p.id),
   ]);
-  if (CHECK_GATES.has(gateKey) && evidence.some((e) => e.stage === p.stage && e.by === user.id)) {
+  if (gateKey === 'qc.clearance' && QC_ITEMS.some((k) => p.qc_clearance?.items?.[k] !== 'pass')) throw new ApiError('qc.itemsFirst');
+  const subject = GATE_SUBJECT[gateKey];
+  if (subject && evidence.some((e) => e.by === user.id && subject.some((pre) => e.step_key.startsWith(pre)))) {
     throw new PermissionError('gate.approve', 'self-approval');
   }
-  if (approvals.some((a) => a.gate_key === gateKey && a.by === user.id && a.stage === p.stage)) {
+  if (approvals.some((a) => a.gate_key === gateKey && a.by === user.id && a.stage === p.stage && a.time_device >= (p.stage_since || 0))) {
     throw new ApiError('gate.alreadyApproved');
   }
   const rec = {
@@ -477,8 +487,30 @@ async function doAdvance(p) {
   await queue('projects', p.id, 'stage.advance');
   await logEvent(p.id, 'stage.advance', { note: `${from}→${next}` });
   await moneyEvent(p, stageDef(from).money);
+  await onEnterStage(p, next);
   emit('data');
   return next;
+}
+
+// System work when a stage starts.
+async function onEnterStage(p, n) {
+  if (n === 8 && !p.team?.qc_id) {
+    // Assign the QC Inspector with the fewest open site clearances.
+    const [users, all] = await Promise.all([db.getAll('users'), db.getAll('projects')]);
+    const qcs = users.filter((u) => u.roles.includes('qc') && u.status === 'active');
+    const load = (id) => all.filter((x) => x.team?.qc_id === id && x.stage <= 8).length;
+    const pick = qcs.sort((a, b) => load(a.id) - load(b.id))[0];
+    if (pick) {
+      p.team = { ...(p.team || {}), qc_id: pick.id };
+      await db.put('projects', p);
+      await logEvent(p.id, 'qc.assigned', { note: pick.id });
+    }
+  }
+}
+
+// After the last proof of a stage the owner does not need to press anything (stages 5 and 6).
+async function autoAdvance(p) {
+  if ((await gateFor(p)).ok && nextStage(p)) await doAdvance(p);
 }
 
 // Money events fired when a stage gate is passed.
@@ -742,7 +774,7 @@ export async function nextStep() {
   const projects = await listProjects();
   const rank = { red: 0, yellow: 1, green: 2 };
   const mine = projects.filter((p) => {
-    if (role === 'admin') return false;
+    if (role === 'admin' || p.flags?.cancelled) return false;
     // Price talks: the negotiator only handles hand-offs; the customer answers the bot's offer.
     if (p.stage === 4 && role === 'negotiator') return !!p.flags?.handoff;
     if (p.stage === 4 && role === 'customer') return !!p.price && !p.price.accepted && p.price.by !== 'customer';
@@ -1037,6 +1069,14 @@ export async function salesTick(now = Date.now()) {
   const all = await db.getAll('projects');
   let changed = 0;
   for (const p of all) {
+    // Site readiness: a picture reminder to the customer every 3 days.
+    if (p.stage === 7 && !p.flags?.cancelled && now - (p.readiness_reminded || p.stage_since) >= 72 * HOUR) {
+      p.readiness_reminded = now;
+      await db.put('projects', p);
+      await asBot(() => postMessage(p, { type: 'bot', content: { key: 'bot.readinessReminder', params: {} } }));
+      changed += 1;
+      continue;
+    }
     const waitingOnCustomer = (p.stage === 3 && p.sales?.whatsapp_sent && p.sales?.reply !== 'interested')
       || (p.stage === 4 && p.price && !p.price.accepted && !p.flags?.handoff);
     if (!waitingOnCustomer || p.flags?.cold) continue;
@@ -1086,6 +1126,172 @@ export async function salesPipeline() {
     cold: list.filter((p) => p.flags?.cold).length,
     wonThisWeek: list.filter((p) => p.price?.accepted && (p.price.accepted_time || 0) >= weekAgo).length,
   };
+}
+
+// ---------- agreement, token, permit, readiness, QC clearance (stages 5–8) ----------
+
+function requireOwnCustomer(p, action) {
+  const ctx = requireLogin();
+  if (ctx.role !== 'customer' || p.customer_id !== ctx.user.id) throw new PermissionError(action);
+  return ctx;
+}
+
+// The customer listened to the whole agreement (the app reads every section aloud).
+export async function markAgreementRead(projectId, sections) {
+  const p = await rawProject(projectId);
+  requireOwnCustomer(p, 'agreement.read');
+  if (p.stage !== 5) throw new ApiError('sales.nothingToDo');
+  p.agreement = { ...(p.agreement || {}), read_aloud: { time: Date.now(), sections } };
+  await db.put('projects', p);
+  await queue('projects', p.id, 'agreement.read');
+  await logEvent(p.id, 'agreement.read', { note: String(sections) });
+}
+
+// Spoken "yes" recorded (audio clip is evidence). Legal text is never a hidden "I agree" box.
+export async function agreementVoiceYes(projectId, clip, heard = '') {
+  const p = await rawProject(projectId);
+  const { user } = requireOwnCustomer(p, 'agreement.yes');
+  if (!p.agreement?.read_aloud) throw new ApiError('agreement.readFirst');
+  const clipId = await saveFile(clip, { kind: 'consent', project_id: p.id, owner_id: user.id });
+  p.agreement = { ...p.agreement, voice_yes: { clip_id: clipId, heard, time: Date.now() } };
+  await db.put('projects', p);
+  await logEvent(p.id, 'agreement.yes', { proof_ids: [clipId] });
+}
+
+// Aadhaar eSign through a licensed provider – simulated here (OTP 123456).
+export async function esignAgreement(projectId, otp) {
+  const p = await rawProject(projectId);
+  const { user, role } = requireOwnCustomer(p, 'agreement.esign');
+  if (!p.agreement?.voice_yes) throw new ApiError('agreement.yesFirst');
+  if (otp !== DEMO_OTP) throw new ApiError('login.wrongOtp');
+  const fix = lastKnownFix();
+  const sig = { by: user.id, role, method: 'aadhaar_esign', time: Date.now(), gps: fix ? { lat: fix.lat, lng: fix.lng } : null };
+  p.agreement = {
+    ...p.agreement, signatures: [...(p.agreement.signatures || []), sig],
+    estamp_ref: p.agreement.estamp_ref || `GRAS-DEMO-${Date.now().toString().slice(-8)}`,
+  };
+  await db.put('projects', p);
+  await write('approvals', { id: db.uid('ap'), project_id: p.id, stage: p.stage, gate_key: 'agreement.esign', by: user.id, role, method: 'esign', time_device: Date.now(), time_server: null });
+  await logEvent(p.id, 'agreement.esign');
+  await autoAdvance(p);
+}
+
+/**
+ * Record a payment result from the payment adapter. In this demo the adapter is simulated UPI;
+ * with a real aggregator the server confirms by webhook before this marks it paid.
+ */
+export async function recordPayment(projectId, milestone, result) {
+  const p = await rawProject(projectId);
+  requireOwnCustomer(p, 'payment');
+  const row = (p.payments || []).find((x) => x.milestone === milestone);
+  if (!row) throw new ApiError('error.notFound');
+  if (row.status === 'paid') throw new ApiError('pay.already');
+  // Milestones are paid in order: token, then delivery (at the container), cabin, handover.
+  const order = ['token', 'delivery', 'cabin', 'handover'];
+  const prevDue = order.slice(0, order.indexOf(milestone)).some((m) => (p.payments.find((x) => x.milestone === m)?.status) !== 'paid');
+  if (prevDue) throw new ApiError('pay.inOrder');
+  if (milestone === 'token' && !(p.agreement?.signatures || []).length) throw new ApiError('pay.signFirst');
+  const attempt = { status: result.status, ref: result.ref || null, method: result.method || 'upi', time: Date.now() };
+  row.attempts = [...(row.attempts || []), attempt];
+  if (result.status === 'success') { row.status = 'paid'; row.time = attempt.time; row.ref = attempt.ref; }
+  await db.put('projects', p);
+  await queue('projects', p.id, 'payment');
+  await logEvent(p.id, result.status === 'success' ? 'payment.paid' : 'payment.failed', { note: `${milestone}:${row.amount}` });
+  if (result.status === 'success') await autoAdvance(p);
+  return row.status;
+}
+
+// Stage 6: Admin enters the erection permission application number.
+export async function setPermit(projectId, number) {
+  const { user, role } = requireLogin();
+  if (role !== 'admin') throw new PermissionError('permit.set');
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'project.view', p);
+  const n = String(number || '').trim();
+  if (n.length < 4) throw new ApiError('permit.invalid');
+  p.permits = { ...(p.permits || {}), erection_no: n, applied_time: Date.now(), applied_by: user.id };
+  await db.put('projects', p);
+  await logEvent(p.id, 'permit.applied', { note: n });
+  await autoAdvance(p);
+}
+
+function requireQcOn(p) {
+  const ctx = requireLogin();
+  if (ctx.role === 'admin') return ctx;
+  if (ctx.role !== 'qc' || p.team?.qc_id !== ctx.user.id) throw new PermissionError('qc.clearance');
+  return ctx;
+}
+
+// Stage 8 checklist: pass/fail per item + measurements in mm. Critical items need the QC's own sign.
+export const QC_ITEMS = ['shaftClean', 'shaftSize', 'pit', 'headroom', 'power', 'earth'];
+export const QC_CRITICAL = ['power', 'earth'];
+
+export async function saveQcChecklist(projectId, { items = {}, measurements = {} }) {
+  const p = await rawProject(projectId);
+  const { user } = requireQcOn(p);
+  if (p.stage !== 8) throw new ApiError('sales.nothingToDo');
+  const m = Object.fromEntries(Object.entries(measurements).filter(([, v]) => Number(v) > 0).map(([k, v]) => [k, Math.round(Number(v))]));
+  p.qc_clearance = { items: { ...(p.qc_clearance?.items || {}), ...items }, measurements: { ...(p.qc_clearance?.measurements || {}), ...m }, by: user.id, time: Date.now() };
+  if (m.shaft_w) p.spec = { ...(p.spec || {}), shaft_w: m.shaft_w };
+  if (m.shaft_d) p.spec = { ...(p.spec || {}), shaft_d: m.shaft_d };
+  if (m.pit) p.spec = { ...(p.spec || {}), pit: m.pit };
+  if (m.headroom) p.spec = { ...(p.spec || {}), headroom: m.headroom };
+  await db.put('projects', p);
+  await logEvent(p.id, 'qc.checklist');
+  return p.qc_clearance;
+}
+
+// Drawings go to the customer only after the shaft is measured and every item passed.
+export async function releaseDrawings(projectId) {
+  const p = await rawProject(projectId);
+  requireQcOn(p);
+  const items = p.qc_clearance?.items || {};
+  if (!(p.spec?.shaft_w && p.spec?.shaft_d)) throw new ApiError('qc.measureFirst');
+  if (QC_ITEMS.some((k) => items[k] !== 'pass')) throw new ApiError('qc.itemsFirst');
+  const photos = (await db.getByIndex('evidence', 'project_id', p.id)).filter((e) => e.stage === 8 && e.step_key === 'qc.shaft');
+  if (!photos.length) throw new ApiError('qc.photoFirst');
+  p.drawings = { released: true, time: Date.now(), spec: { ...p.spec } };
+  await db.put('projects', p);
+  await logEvent(p.id, 'drawings.released');
+}
+
+// QC rejects the site: picture list of fixes to the customer, back to stage 7.
+export async function qcRejectSite(projectId) {
+  const p = await rawProject(projectId);
+  const { user, role } = requireQcOn(p);
+  if (p.stage !== 8) throw new ApiError('sales.nothingToDo');
+  const fixes = QC_ITEMS.filter((k) => p.qc_clearance?.items?.[k] === 'fail');
+  if (!fixes.length) throw new ApiError('qc.noFails');
+  p.issues = [...(p.issues || []), { id: db.uid('iss'), type: 'qc_site_reject', fixes, time: Date.now(), by: user.id, status: 'open' }];
+  p.qc_rejected = true;
+  p.stage = 7;
+  p.stage_since = Date.now();
+  p.qc_clearance = { ...p.qc_clearance, rejected_time: Date.now() };
+  await db.put('projects', p);
+  await queue('projects', p.id, 'qc.reject');
+  await write('approvals', { id: db.uid('ap'), project_id: p.id, stage: 8, gate_key: 'qc.clearance.reject', by: user.id, role, method: 'esign', fixes, time_device: Date.now(), time_server: null });
+  await logEvent(p.id, 'qc.reject', { note: fixes.join(','), loud: true });
+  await postMessage(p, { type: 'bot', by: { user, role }, content: { key: 'qc.fixMsg', params: { n: fixes.length } } });
+  emit('data');
+  return fixes;
+}
+
+// Cancel after token: refund follows the rule in settings (default: only if QC rejected the site).
+export async function cancelProject(projectId, reason) {
+  const { user, role } = requireLogin();
+  if (role !== 'admin') throw new PermissionError('project.cancel');
+  if (!String(reason || '').trim()) throw new ApiError('override.reasonNeeded');
+  const p = await rawProject(projectId);
+  if (p.stage < 5 || p.stage > 8) throw new ApiError('cancel.tooLate');
+  const rules = await getRules();
+  const token = (p.payments || []).find((x) => x.milestone === 'token' && x.status === 'paid');
+  const refundable = !!token && (rules.refund_rule === 'always' || (rules.refund_rule === 'qc_reject_only' && !!p.qc_rejected));
+  p.flags = { ...(p.flags || {}), cancelled: true, cancel_time: Date.now(), cancel_reason: reason };
+  if (token) token.refund = refundable ? { amount: token.amount, status: 'refund_due' } : { amount: 0, status: 'not_refundable' };
+  await db.put('projects', p);
+  await logEvent(p.id, 'project.cancel', { note: reason, loud: true });
+  emit('data');
+  return { refundable, amount: refundable ? token.amount : 0 };
 }
 
 // ---------- rider: duty, routes, lead capture ----------

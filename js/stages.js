@@ -143,18 +143,22 @@ function evidenceAccepted(e) {
 export function checkGate(project, { evidence = [], approvals = [] } = {}) {
   const def = stageDef(project.stage);
   if (!def) return { ok: false, items: [] };
+  // Only proofs made since this stage (re)started count: after a QC rejection sends a project
+  // back, the old photos and approvals must be done again.
+  const since = project.stage_since || 0;
+  const fresh = (x) => !x.time_device || x.time_device >= since;
   const items = def.reqs.map((r) => {
     let done = false;
     let have = 0;
     if (r.type === 'evidence') {
       have = evidence
-        .filter((e) => e.project_id === project.id && e.stage === project.stage && e.step_key === r.step && evidenceAccepted(e))
+        .filter((e) => e.project_id === project.id && e.stage === project.stage && e.step_key === r.step && evidenceAccepted(e) && fresh(e))
         .reduce((n, e) => n + (e.files?.length || 0), 0);
       done = have >= r.min;
     } else if (r.type === 'field') {
       done = !!r.check(project);
     } else if (r.type === 'approval') {
-      done = approvals.some((a) => a.project_id === project.id && a.gate_key === r.gate && r.roles.includes(a.role) && !a.revoked);
+      done = approvals.some((a) => a.project_id === project.id && a.gate_key === r.gate && r.roles.includes(a.role) && !a.revoked && fresh(a));
     } else if (r.type === 'payment') {
       done = paid(project, r.milestone);
     }

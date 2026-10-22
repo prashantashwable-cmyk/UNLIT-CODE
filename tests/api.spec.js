@@ -82,11 +82,15 @@ test('no self-approval: evidence creator cannot review it; override needs a seco
   expect(p.stage).toBe(7);
 });
 
-test('QC who took the evidence cannot approve that QC gate', async ({ page }) => {
+test('QC who made the evidence being checked cannot approve that QC gate', async ({ page }) => {
   await startDemo(page, 'u_qc2');
   await page.evaluate(async () => {
     const db = await import('/js/db.js');
-    await db.add('evidence', { id: 'ev_qc', project_id: 'p0007', stage: 8, step_key: 'qc.shaft', by: 'u_qc2', role: 'qc', files: [], time_device: Date.now() });
+    // QC's own measurement photo is fine; readiness evidence made by the same QC is not.
+    await db.add('evidence', { id: 'ev_qc', project_id: 'p0007', stage: 7, step_key: 'readiness.shaft', by: 'u_qc2', role: 'qc', files: [], time_device: Date.now() });
+    const p = await db.get('projects', 'p0007');
+    p.qc_clearance = { items: Object.fromEntries(['shaftClean', 'shaftSize', 'pit', 'headroom', 'power', 'earth'].map((k) => [k, 'pass'])) };
+    await db.put('projects', p);
   });
   await expectDenied(page, (a) => a.approveGate('p0007', 'qc.clearance'));
 });

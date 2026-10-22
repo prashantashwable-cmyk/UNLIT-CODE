@@ -4,7 +4,7 @@ Installable, offline-first web app for AIEC (Pune): one Project record per lift,
 first lead photo to the last AMC visit. Built for people who cannot read well: every field
 screen **speaks first**, uses **pictures + colours**, big buttons and **zero typing**.
 
-> Status: Phases **1 – Foundation**, **2 – Rider** and **3 – Sales** done (see "What's done"). Phases 4–9 follow, one at a time.
+> Status: Phases **1 – Foundation**, **2 – Rider**, **3 – Sales** and **4 – Agreement → QC clearance** done (see "What's done"). Phases 5–9 follow, one at a time.
 
 ## Run it
 
@@ -117,6 +117,27 @@ with resident tickets (0012). Ledger entries exist in every bucket and riders ha
 - **Owner**: below-floor price requests wait on the Owner's Today page (approve / say no).
 - **Negotiator Today**: hand-offs first, leads sorted by score with "Run sales bot", evening pipeline report.
 
+## What's done (Phase 4 – Agreement → QC clearance)
+
+- **Agreement (stage 5)**, customer, in four steps – never a hidden "I agree" box:
+  1. the app **reads every section aloud** (parties, lift, price + GST line, payment schedule, refund rule,
+     duties, permission/licence, non-solicit, stamp duty) – one section per screen;
+  2. the customer's **spoken "yes"** is recorded (audio kept as evidence);
+  3. **Aadhaar OTP eSign** (simulated, OTP 123456) with an e-stamp reference placeholder;
+  4. **token by UPI** through a swappable payment adapter (`js/payments.js`, demo Success/Fail).
+  Token paid → project moves to stage 6 by itself and the rider's main commission is booked.
+- **Permit (stage 6)**: Admin enters the erection-permission application number → stage 7.
+- **Site readiness (stage 7)**: picture SOP checklist (shaft, pit, headroom, 3-phase power, earthing –
+  marked "Sample SOP"), shaft and power photos with the in-app camera, customer approval; picture
+  reminder every 3 days.
+- **QC site clearance (stage 8)**: QC auto-assigned (least busy). Shaft photo, measurements by number pad
+  (mm), pass/fail per item with critical items marked, **release drawings**, face-checked approval.
+  Any fail → **reject site**: the customer gets a red picture fix list and the project goes back to
+  stage 7, where old photos and approvals no longer count.
+- **Drawings**: generated SVG plan + side view from the measured shaft; customer sees them once released.
+- **Cancel after token** (Admin, with reason): refund follows the settings rule (default: only if QC
+  rejected the site).
+
 ## Folder
 
 ```
@@ -157,6 +178,8 @@ npx playwright test
   capture locked while moving, AI retake + appeal, end-day summary, rider map, offline address pending.
 - `sales.spec.js` – full lead → WhatsApp → reply → quote → 1.50/1.40/1.30 counters → hand-off → negotiator
   (below floor refused) → accept; quote guard per role incl. Owner; cold after 3 reminders → revisit pin.
+- `agreement.spec.js` – stage 4 → 8 only with every proof (agreement, failed + successful UPI, permit,
+  readiness, QC reject → fix list → redo → measure, release drawings, approve), cancel/refund, reminders.
 - `pwa.spec.js` – Chrome installability check (no errors), works offline after first load, real-mode install gate.
 
 After editing shell files run `node tools/gen-precache.mjs` (a test fails if the list is stale).

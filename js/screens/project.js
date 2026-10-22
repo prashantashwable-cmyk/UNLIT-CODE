@@ -14,6 +14,7 @@ import { openCamera } from '../camera.js';
 import { setDemoPosition } from '../geo.js';
 import { sectionTitle, stageName } from './common.js';
 import { salesPanel } from './sales/panel.js';
+import { stagePanels } from './stages/index.js';
 
 const GHOST = { 'lead.site': 'site', 'lead.shaft': 'shaft', 'lead.board': 'board', 'readiness.shaft': 'shaft', 'readiness.power': 'part', 'dispatch.packing': 'part' };
 const SCENE = { 'lead.site': 'site', 'lead.shaft': 'shaft', 'lead.board': 'board', 'readiness.shaft': 'readiness', 'readiness.power': 'readiness', 'dispatch.packing': 'packing' };
@@ -139,6 +140,30 @@ function overrideButton(p, refresh) {
   });
 }
 
+// Admin: cancel after token. The refund follows the rule in settings (shown to the admin).
+function cancelButton(p, refresh) {
+  return bigButton({
+    icon: 'stop', label: t('cancel.button'), colour: 'red', small: true, testid: 'cancel-project',
+    onClick: () => {
+      const input = h('textarea', { class: 'text-input', rows: 2, 'aria-label': t('override.reason'), placeholder: t('override.reason'), 'data-testid': 'cancel-reason' });
+      const body = h('div', {}, h('p', { class: 'c-text-red' }, t('cancel.warn')), h('div', { class: 'input-row' }, input,
+        canListen() ? iconButton('mic', t('common.speak'), async () => { const s2 = await listen(); if (s2) input.value = s2; }) : null),
+      bigButton({
+        icon: 'stop', label: t('cancel.confirm'), colour: 'red', small: true, testid: 'cancel-confirm',
+        onClick: async () => {
+          try {
+            const r = await api.cancelProject(p.id, input.value);
+            s.close();
+            toast(r.refundable ? t('cancel.refund', { amount: formatINR(r.amount) }) : t('cancel.noRefund'), 'yellow');
+            refresh();
+          } catch (e) { showError(e); }
+        },
+      }));
+      const s = sheet(body, { title: t('cancel.button') });
+    },
+  });
+}
+
 function tracker(p, evidence) {
   const pct = progressPct(p, p.gate);
   const list = h('ol', { class: 'tracker', 'aria-label': t('project.tracker') });
@@ -233,6 +258,12 @@ function noteFor(e) {
   if (e.action === 'sales.reply') return t(`wa.btn.${e.note}`);
   if (e.action === 'bot.offer') return t(`ask.${e.note}`);
   if (e.action === 'sales.handoff') return t(`sales.why.${e.note}`);
+  if (e.action === 'payment.paid' || e.action === 'payment.failed') {
+    const [m, amt] = e.note.split(':');
+    return `${t(`milestone.${m}`)} · ${formatINR(Number(amt))}`;
+  }
+  if (e.action === 'qc.reject') return e.note.split(',').map((k) => t(`chk.${k}`)).join(', ');
+  if (['qc.assigned', 'agreement.read', 'qc.checklist', 'drawings.released', 'agreement.yes', 'agreement.esign'].includes(e.action)) return null;
   if (e.action === 'bot.whatsapp' || e.action === 'bot.call' || e.action === 'bot.quote' || e.action === 'sales.cold' || e.action === 'lead.revisit') return null;
   if (e.action === 'lead.capture') return null;
   return e.note; // typed reason or bridge number
@@ -263,9 +294,12 @@ export default async function projectScreen({ params, user, role, refresh }) {
       h('div', { class: 'ph-stage' }, h('span', { class: 'stage-num' }, String(p.stage)), stageName(p.stage),
         h('span', { class: `status-text c-text-${p.colour}` }, ` · ${t(`status.${p.colour}`)}`), clock ? h('small', {}, ` · ${clock}`) : null),
       p.lead?.duplicates?.length ? h('div', { class: 'hint' }, icon('layers', 'ic sm'), t('project.duplicates', { n: p.lead.duplicates.length })) : null,
+      p.flags?.cancelled ? h('div', { class: 'c-text-red', 'data-testid': 'cancelled' }, icon('stop', 'ic sm'), t('cancel.done')) : null,
       p.issues?.filter((i) => i.status === 'open').map((i) => h('div', { class: 'c-text-red' }, icon('warning', 'ic sm'), t(`issue.${i.type}`)))),
     gatePanel(p, { user, role, refresh }),
     await salesPanel(p, { role, refresh }),
+    await stagePanels(p, { user, role, refresh }),
+    role === 'admin' && p.stage >= 5 && p.stage <= 8 && !p.flags?.cancelled ? cancelButton(p, refresh) : null,
     bigButton({ icon: 'chat', label: t('project.openChat'), colour: 'blue', small: true, onClick: () => { location.hash = `#/chat/${p.id}/main`; } }),
     tracker(p, evidence),
     contactSection(p, { user, role }),
