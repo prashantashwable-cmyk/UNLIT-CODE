@@ -1,0 +1,63 @@
+/* Layout, typography and scaling. Mobile first (360 px), 2 columns on tablets,
+   sidebar-style wide layout on desktop. */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: var(--fs);
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg);
+  background-image: var(--bg-image);
+  background-attachment: fixed;
+  min-height: 100vh;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+img { max-width: 100%; }
+h1 { font-size: var(--fs-xl); margin: 0 0 calc(var(--s) * 8px); line-height: 1.2; }
+h2 { font-size: var(--fs-lg); margin: 0; }
+h3 { font-size: var(--fs); margin: var(--gap) 0 calc(var(--gap) / 2); }
+p { margin: calc(var(--s) * 6px) 0; }
+a { color: var(--t-info); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+[hidden] { display: none !important; }
+
+#app { min-height: 100vh; display: flex; flex-direction: column; }
+.screen {
+  flex: 1;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--pad) var(--pad) calc(var(--tabbar-h) + 96px);
+  outline: none;
+}
+.boot-splash { min-height: 100vh; display: grid; place-items: center; }
+
+/* Field screens: dirty hands → ≥ 64 px targets at any scale. */
+body.field { --tap: max(64px, calc(var(--s) * 72px)); }
+
+/* Tablet: two columns for lists. */
+@media (min-width: 768px) {
+  .screen { max-width: 980px; }
+  .today, .chat-list, .money-screen, .settings, .map-list, .buckets { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); align-items: start; }
+  .today > .next-step, .today > .routine, .today > .section-title, .today > .primary-zone,
+  .money-screen > .section-title, .money-screen > .money, .money-screen > .table-wrap,
+  .settings > .section-title, .settings > .choices, .settings > .danger-zone, .settings > .theme-grid, .settings > .scale,
+  .chat-list > .section-title, .chat-list > .empty { grid-column: 1 / -1; }
+}
+
+/* Desktop: wide content with the tab bar as a left sidebar. */
+@media (min-width: 1100px) {
+  .screen { max-width: 1180px; padding-left: calc(var(--pad) + 120px); padding-bottom: 96px; }
+  .tabbar { top: var(--topbar-h); bottom: 0; left: 0; right: auto; width: 112px; height: auto; flex-direction: column; justify-content: flex-start; padding-top: var(--gap); border-top: 0; border-right: 1px solid var(--line); }
+  .tabbar .tab { flex: 0 0 auto; height: 88px; }
+  .help-fab { bottom: var(--pad); }
+  .undo-bar { bottom: var(--pad); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

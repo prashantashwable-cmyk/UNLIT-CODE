@@ -1,0 +1,14 @@
+{
+  "name": "aiec-field-pwa",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ALL INDIA ELEVATORS COMPANY field platform PWA. No build step: serve this folder as static files.",
+  "scripts": {
+    "serve": "node tools/serve.mjs",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}
