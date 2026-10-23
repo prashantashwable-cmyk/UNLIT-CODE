@@ -10,6 +10,9 @@ import { checkGate, isStageOwner, nextStage, statusColour, stageDef } from './st
 import { bucketTotals } from './ledger.js';
 import { weightedRating } from './trust.js';
 import { lastKnownFix, setDemoMode, distanceM, GEOFENCE_M, speedKmh, SUSPICIOUS_KMH } from './geo.js';
+import {
+  bomFor, containerPosition, keyRole, validKeys, canUnlock, emiSchedule, emiAmount, OFFLINE_CODE_MS, UNPAID_RETURN_MS, UNPAID_REMINDERS_MIN,
+} from './supply.js';
 import { coveredHexes, routeKm, neighbours, hexId, hexCenter, HEX_AREA_KM2 } from './hex.js';
 import { seedDemo, DEFAULT_RULES, AREAS } from './seed.js';
 import {
@@ -92,6 +95,7 @@ export async function init() {
 }
 
 async function startSession(user, role = user.roles[0], extra = {}) {
+  emit('before-session'); // pending Undo actions commit as the person who made them
   me = user;
   session = { userId: user.id, role, at: Date.now(), ...extra };
   saveSession();
@@ -99,12 +103,14 @@ async function startSession(user, role = user.roles[0], extra = {}) {
 }
 
 export function logout() {
+  emit('before-session');
   me = null; session = null; saveSession(); emit('session');
 }
 
 export async function switchRole(role) {
   const { user } = requireLogin();
   if (!user.roles.includes(role)) throw new PermissionError('role.switch');
+  emit('before-session');
   session.role = role; saveSession(); emit('session');
 }
 
@@ -375,7 +381,7 @@ export async function hashUsed(sha256) {
 }
 
 // files: [{blob, sha256, kind:'photo'|'video'}]; stamp: burnt-in facts; ai: check result
-export async function addEvidence({ projectId, stepKey, files, stamp, ai, kind = 'site' }) {
+export async function addEvidence({ projectId, stepKey, files, stamp, ai, kind = 'site', meta = {} }) {
   const { user, role } = requireLogin();
   const p = await rawProject(projectId);
   assertCan(user, role, 'evidence.capture', p);
@@ -391,7 +397,7 @@ export async function addEvidence({ projectId, stepKey, files, stamp, ai, kind =
     id: db.uid('ev'), project_id: p.id, stage: p.stage, step_key: stepKey, by: user.id, role,
     sha256: files[0]?.sha256, files: fileRefs, stamp, ai: ai || null, review: null,
     assisted_by: session.assistedBy?.id || null,
-    time_device: Date.now(), time_server: null,
+    time_device: Date.now(), time_server: null, ...meta,
   };
   await write('evidence', rec);
   await logEvent(p.id, 'evidence.add', { proof_ids: [rec.id], note: stepKey });
@@ -404,7 +410,7 @@ export async function listEvidence(projectId) {
   assertCan(user, role, 'project.view', p);
   const all = await db.getByIndex('evidence', 'project_id', projectId);
   const sitePhotos = can(user, role, 'project.sitePhotos', p);
-  return all.filter((e) => sitePhotos || e.by === user.id || (role === 'supplier' && e.step_key.startsWith('dispatch')));
+  return all.filter((e) => sitePhotos || e.by === user.id || (role === 'supplier' && (e.step_key.startsWith('dispatch') || e.step_key.startsWith('bom.'))));
 }
 
 // Human review of evidence. Whoever created it can never approve it.
@@ -493,7 +499,32 @@ async function doAdvance(p) {
 }
 
 // System work when a stage starts.
+async function leastBusy(roleList, key) {
+  const [users, all] = await Promise.all([db.getAll('users'), db.getAll('projects')]);
+  const people = users.filter((u) => u.roles.some((r) => roleList.includes(r)) && u.status === 'active' && !u.system);
+  const load = (id) => all.filter((x) => (key === 'techs' ? x.team?.lead_tech === id : x.team?.[key] === id) && x.stage < 16).length;
+  return people.sort((a, b) => load(a.id) - load(b.id))[0] || null;
+}
+
 async function onEnterStage(p, n) {
+  if (n === 9 && !p.team?.supplier_id) {
+    const s9 = await leastBusy(['supplier'], 'supplier_id');
+    if (s9) { p.team = { ...(p.team || {}), supplier_id: s9.id }; await db.put('projects', p); await logEvent(p.id, 'supplier.assigned'); }
+  }
+  if (n === 11) {
+    // The container leaves the supplier; a technician team is booked for the delivery.
+    const rules = await getRules();
+    const sup = p.team?.supplier_id ? await db.get('users', p.team.supplier_id) : null;
+    const from = sup?.home || { lat: p.site.lat + 0.05, lng: p.site.lng + 0.05 };
+    const now = Date.now();
+    p.container = { ...(p.container || {}), from, dispatched_time: now, eta: now + (rules.container_eta_hours || 3) * 3600 * 1000, arrived_time: null, lock: 'locked' };
+    if (!p.team?.lead_tech) {
+      const lead = await leastBusy(['technician', 'senior'], 'techs');
+      if (lead) p.team = { ...(p.team || {}), lead_tech: lead.id, techs: p.team?.techs || [] };
+    }
+    await db.put('projects', p);
+    await logEvent(p.id, 'container.dispatched');
+  }
   if (n === 8 && !p.team?.qc_id) {
     // Assign the QC Inspector with the fewest open site clearances.
     const [users, all] = await Promise.all([db.getAll('users'), db.getAll('projects')]);
@@ -519,6 +550,10 @@ async function moneyEvent(p, key) {
   const rules = await getRules();
   if (key === 'rider.verified' && p.lead?.rider_id) {
     await addLedger(p.lead.rider_id, p.id, 'rider.verified', rules.rider_verified_amount, 'provisional');
+  }
+  if ((key === 'delivery' || key === 'cabin') && p.team?.supplier_id && p.costing?.supply_price) {
+    const pct = (rules.supplier_split || { delivery: 75, cabin: 25 })[key];
+    await addLedger(p.team.supplier_id, p.id, `supply.${key}`, Math.round((p.costing.supply_price * pct) / 100), 'payable');
   }
   if (key === 'token' && p.lead?.rider_id) {
     await addLedger(p.lead.rider_id, p.id, 'rider.main', rules.rider_main_commission, 'provisional');
@@ -1069,6 +1104,7 @@ export async function salesTick(now = Date.now()) {
   const all = await db.getAll('projects');
   let changed = 0;
   for (const p of all) {
+    if (p.stage === 11 && !p.flags?.cancelled) changed += await containerTick(p, now);
     // Site readiness: a picture reminder to the customer every 3 days.
     if (p.stage === 7 && !p.flags?.cancelled && now - (p.readiness_reminded || p.stage_since) >= 72 * HOUR) {
       p.readiness_reminded = now;
@@ -1292,6 +1328,275 @@ export async function cancelProject(projectId, reason) {
   await logEvent(p.id, 'project.cancel', { note: reason, loud: true });
   emit('data');
   return { refundable, amount: refundable ? token.amount : 0 };
+}
+
+// ---------- supply & delivery (stages 9–12), container lock, EMI ----------
+
+export function bomLines(p) { return bomFor(p.spec); }
+export function containerNow(p, now = Date.now()) { return containerPosition(p.container, p.site, now); }
+export { validKeys };
+
+const deliveryPaid = (p) => (p.payments || []).some((x) => x.milestone === 'delivery' && x.status === 'paid');
+
+function requireSupplierOf(p) {
+  const ctx = requireLogin();
+  if (ctx.role !== 'supplier' || p.team?.supplier_id !== ctx.user.id) throw new PermissionError('supplier.only');
+  return ctx;
+}
+
+// Stage 9: supplier accepts the order with a dispatch date (3, 5 or 7 days).
+export async function acceptOrder(projectId, days) {
+  const p = await rawProject(projectId);
+  const { user, role } = requireSupplierOf(p);
+  if (p.stage !== 9) throw new ApiError('sales.nothingToDo');
+  const d = [3, 5, 7].includes(Number(days)) ? Number(days) : 5;
+  p.supply = { ...(p.supply || {}), accepted: Date.now(), dispatch_date: Date.now() + d * 24 * 3600 * 1000, bom: bomFor(p.spec) };
+  await db.put('projects', p);
+  await write('approvals', { id: db.uid('ap'), project_id: p.id, stage: 9, gate_key: 'production', by: user.id, role, method: 'pin', time_device: Date.now(), time_server: null });
+  await logEvent(p.id, 'supply.accepted', { note: String(d) });
+  await autoAdvance(p);
+}
+
+// Stage 10: every BOM line needs a packing photo, plus the delivery challan, before sealing.
+export async function packingStatus(projectId) {
+  const p = await rawProject(projectId);
+  const ev = (await db.getByIndex('evidence', 'project_id', p.id)).filter((e) => e.stage === 10);
+  const packed = new Set(ev.filter((e) => e.step_key === 'dispatch.packing').map((e) => e.line));
+  return { lines: bomFor(p.spec).map((l) => ({ ...l, packed: packed.has(l.key) })), challan: ev.some((e) => e.step_key === 'dispatch.challan') };
+}
+
+export async function sealContainer(projectId) {
+  const p = await rawProject(projectId);
+  requireSupplierOf(p);
+  if (p.stage !== 10) throw new ApiError('sales.nothingToDo');
+  const st = await packingStatus(projectId);
+  if (st.lines.some((l) => !l.packed)) throw new ApiError('supply.packAll');
+  if (!st.challan) throw new ApiError('supply.challanFirst');
+  p.container = {
+    ...(p.container || {}), id: p.container?.id || `CNT-${p.code.slice(-3)}`, sealed: true, seal_no: `SEAL-${Date.now().toString().slice(-5)}`,
+    online: true, lock: 'locked', lock_events: [...(p.container?.lock_events || []), { type: 'seal', by: me.id, time: Date.now() }],
+  };
+  await db.put('projects', p);
+  await logEvent(p.id, 'container.sealed');
+}
+
+// The container reaches the site at its ETA; unpaid → reminders, then back to the supplier after 2 hours.
+async function containerTick(p, now) {
+  const c = p.container || {};
+  let changed = 0;
+  if (c.dispatched_time && !c.arrived_time && c.eta && now >= c.eta) {
+    c.arrived_time = c.eta;
+    await db.put('projects', p);
+    await asBot(() => logEvent(p.id, 'container.arrived'));
+    await asBot(() => postMessage(p, { type: 'bot', content: { key: 'bot.containerArrived', params: {} } }));
+    changed += 1;
+  }
+  if (!c.arrived_time || deliveryPaid(p) || c.unlocked) return changed;
+  const mins = (now - c.arrived_time) / 60000;
+  const sent = c.unpaid_reminders || 0;
+  const due = UNPAID_REMINDERS_MIN.filter((m) => mins >= m).length;
+  if (now - c.arrived_time >= UNPAID_RETURN_MS) {
+    await returnContainer(p, now);
+    return changed + 1;
+  }
+  if (due > sent) {
+    c.unpaid_reminders = due;
+    await db.put('projects', p);
+    const left = Math.max(0, Math.round((UNPAID_RETURN_MS - (now - c.arrived_time)) / 60000));
+    await asBot(() => postMessage(p, { type: 'bot', content: { key: 'bot.payReminder', params: { min: left } } }));
+    changed += 1;
+  }
+  return changed;
+}
+
+// Not paid in 2 hours: the container goes back to the supplier and the project returns to dispatch.
+async function returnContainer(p, now) {
+  p.container = { ...p.container, returning: true, returned_time: now, arrived_time: null, dispatched_time: null, eta: null, unpaid_reminders: 0, lock_events: [...(p.container.lock_events || []), { type: 'return', time: now }] };
+  p.issues = [...(p.issues || []), { id: db.uid('iss'), type: 'unpaid_return', time: now, status: 'open' }];
+  p.flags = { ...(p.flags || {}), red: true, unpaid_since: null, waiting: false };
+  p.stage = 10;
+  p.stage_since = now;
+  await db.put('projects', p);
+  await queue('projects', p.id, 'container.return');
+  await asBot(async () => {
+    await logEvent(p.id, 'container.returned', { loud: true });
+    await postMessage(p, { type: 'bot', content: { key: 'bot.containerReturned', params: {} } });
+  });
+}
+
+// Demo: make the container arrive now / pretend time passed at the site.
+export async function demoContainerTime(projectId, { arriveNow = false, hours = 0 } = {}) {
+  const { role } = requireLogin();
+  if (!isDemo() || !['admin', 'supplier'].includes(role)) throw new PermissionError('demo.only');
+  const p = await rawProject(projectId);
+  if (arriveNow && p.container?.dispatched_time && !p.container.arrived_time) p.container.eta = Date.now();
+  if (hours && p.container?.arrived_time) p.container.arrived_time -= hours * 3600 * 1000;
+  await db.put('projects', p);
+  return salesTick();
+}
+
+// Turn one of the three keys (customer, technician, admin) – each with a live face check.
+export async function turnKey(projectId, selfie) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  const kr = keyRole(role);
+  if (!kr) throw new PermissionError('container.key');
+  assertCan(user, role, 'container.key', p);
+  if (p.stage !== 11 || !p.container?.arrived_time) throw new ApiError('container.notHere');
+  if (p.container.unlocked) throw new ApiError('container.alreadyOpen');
+  if (!deliveryPaid(p)) throw new ApiError('container.payFirst');
+  if (!(await faceMatch(user, selfie))) throw new ApiError('login.faceFail');
+  p.container.lock_events = [...(p.container.lock_events || []), { type: 'key', key_role: kr, by: user.id, method: 'face', time: Date.now() }];
+  await db.put('projects', p);
+  await logEvent(p.id, 'container.key', { note: kr });
+  const keys = validKeys(p.container.lock_events);
+  return { keys, ready: canUnlock({ deliveryPaid: true, keys }).ok };
+}
+
+export async function containerKeys(projectId) {
+  const p = await rawProject(projectId);
+  requireLogin();
+  return validKeys(p.container?.lock_events || []);
+}
+
+async function doOpen(p, { cctv, method }) {
+  const { user } = requireLogin();
+  const clipId = cctv ? await saveFile(cctv, { kind: 'cctv', project_id: p.id, owner_id: user.id }) : null;
+  p.container = {
+    ...p.container, unlocked: true, lock: 'open', opened_time: Date.now(),
+    lock_events: [...(p.container.lock_events || []), { type: 'open', by: user.id, method, cctv_file_id: clipId, time: Date.now() }],
+  };
+  p.flags = { ...(p.flags || {}), unpaid_since: null, waiting: false };
+  await db.put('projects', p);
+  await logEvent(p.id, 'container.open', { note: method, proof_ids: clipId ? [clipId] : [] });
+}
+
+// Open after the three keys, while the CCTV clip records.
+export async function openContainer(projectId, cctv) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  if (!keyRole(role)) throw new PermissionError('container.open');
+  assertCan(user, role, 'container.key', p);
+  const r = canUnlock({ deliveryPaid: deliveryPaid(p), keys: validKeys(p.container?.lock_events || []) });
+  if (!r.ok) throw new ApiError(r.why);
+  await doOpen(p, { cctv, method: 'three_keys' });
+}
+
+// Lock offline: Admin gives a 6-digit code valid 15 minutes (customer + technician face keys still needed).
+export async function issueOfflineCode(projectId) {
+  const { user, role } = requireLogin();
+  if (role !== 'admin') throw new PermissionError('container.code');
+  const p = await rawProject(projectId);
+  if (p.stage !== 11 || !p.container?.arrived_time) throw new ApiError('container.notHere');
+  const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, '0');
+  p.container = { ...p.container, offline_code: { hash: await sha256Hex(`${p.id}:${code}`), expires: Date.now() + OFFLINE_CODE_MS, by: user.id } };
+  await db.put('projects', p);
+  await logEvent(p.id, 'container.code', { loud: true });
+  return code;
+}
+
+export async function openWithCode(projectId, code, cctv) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  if (!['technician', 'senior'].includes(role)) throw new PermissionError('container.code');
+  assertCan(user, role, 'container.key', p);
+  const oc = p.container?.offline_code;
+  const codeOk = !!oc && Date.now() <= oc.expires && (await sha256Hex(`${p.id}:${code}`)) === oc.hash;
+  if (!codeOk) throw new ApiError('container.badCode');
+  const r = canUnlock({ deliveryPaid: deliveryPaid(p), keys: validKeys(p.container.lock_events || []), offlineCodeOk: true });
+  if (!r.ok) throw new ApiError(r.why);
+  p.container.offline_code = null; // single use
+  await doOpen(p, { cctv, method: 'offline_code' });
+}
+
+export async function closeContainer(projectId) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  if (!['technician', 'senior', 'admin'].includes(role)) throw new PermissionError('container.close');
+  assertCan(user, role, 'project.view', p);
+  if (!p.container?.unlocked) throw new ApiError('container.notOpen');
+  p.container = { ...p.container, unlocked: p.container.unlocked, lock: 'locked', lock_events: [...(p.container.lock_events || []), { type: 'close', by: user.id, time: Date.now() }] };
+  await db.put('projects', p);
+  await logEvent(p.id, 'container.close');
+}
+
+// BOM check at delivery (customer or technician): OK, or missing/damaged with a photo → supplier claim.
+export async function checkBomLine(projectId, line, ok, photo = null) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  if (!(role === 'customer' && p.customer_id === user.id) && !(['technician', 'senior'].includes(role) && can(user, role, 'project.view', p))) throw new PermissionError('bom.check');
+  if (p.stage !== 11 || !p.container?.unlocked) throw new ApiError('container.notOpen');
+  const lines = bomFor(p.spec).map((l) => l.key);
+  if (!lines.includes(line)) throw new ApiError('error.notFound');
+  let evId = null;
+  if (!ok) {
+    if (!photo) throw new ApiError('bom.photoNeeded');
+    evId = await addEvidence({ projectId: p.id, stepKey: 'bom.damage', files: [photo], stamp: photo.stamp, ai: { result: 'pass' }, kind: 'dispatch', meta: { line } });
+  }
+  const fresh = await rawProject(projectId);
+  const check = { ...(fresh.container.bom_check || {}), [line]: { ok, by: user.id, role, time: Date.now(), evidence_id: evId } };
+  fresh.container = { ...fresh.container, bom_check: check, bom_checked: lines.every((k) => check[k]) };
+  if (!ok) fresh.issues = [...(fresh.issues || []), { id: db.uid('iss'), type: 'material_claim', line, evidence_id: evId, time: Date.now(), by: user.id, status: 'open' }];
+  await db.put('projects', fresh);
+  await logEvent(p.id, ok ? 'bom.ok' : 'bom.claim', { note: line, loud: !ok });
+}
+
+// Stage 12: the supplier sends the cabin (demo: it arrives at once).
+export async function shipCabin(projectId) {
+  const p = await rawProject(projectId);
+  requireSupplierOf(p);
+  if (p.stage !== 12) throw new ApiError('sales.nothingToDo');
+  p.cabin = { shipped_time: Date.now(), arrived_time: Date.now() };
+  await db.put('projects', p);
+  await logEvent(p.id, 'cabin.arrived');
+}
+
+// ---------- EMI (NBFC) ----------
+
+export async function applyEmi(projectId, { months, amount, consent }) {
+  const p = await rawProject(projectId);
+  requireOwnCustomer(p, 'emi.apply');
+  if (!consent) throw new ApiError('emi.consentNeeded');
+  if (p.stage < 5 || p.stage > 11) throw new ApiError('emi.notNow');
+  const nbfc = (await db.getAll('users')).find((u) => u.roles.includes('nbfc'));
+  const max = Math.round((p.price?.amount || 0) * 0.7);
+  p.emi = { nbfc_id: nbfc.id, consent: { time: Date.now() }, amount: Math.min(Math.round(amount || max), max), months: [12, 24, 36].includes(months) ? months : 24, status: 'applied', applied_time: Date.now() };
+  await db.put('projects', p);
+  await logEvent(p.id, 'emi.applied');
+}
+
+export async function decideEmi(projectId, approve) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  if (role !== 'nbfc' || p.emi?.nbfc_id !== user.id) throw new PermissionError('emi.decide');
+  if (p.emi.status !== 'applied') throw new ApiError('sales.nothingToDo');
+  const rules = await getRules();
+  const rate = rules.nbfc_rate_pct || 14;
+  p.emi = { ...p.emi, status: approve ? 'approved' : 'rejected', rate, emi: approve ? emiAmount(p.emi.amount, p.emi.months, rate) : null, decided_time: Date.now() };
+  await db.put('projects', p);
+  await write('approvals', { id: db.uid('ap'), project_id: p.id, stage: p.stage, gate_key: 'loan', approve, by: user.id, role, method: 'pin', time_device: Date.now(), time_server: null });
+  await logEvent(p.id, approve ? 'emi.approved' : 'emi.rejected');
+}
+
+// The NBFC pays the delivery milestone straight to AIEC when the container is at site.
+export async function disburseEmi(projectId) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  if (role !== 'nbfc' || p.emi?.nbfc_id !== user.id) throw new PermissionError('emi.disburse');
+  if (p.emi.status !== 'approved') throw new ApiError('emi.notApproved');
+  const row = (p.payments || []).find((x) => x.milestone === 'delivery');
+  if (p.stage !== 11 || !row || row.status === 'paid') throw new ApiError('emi.notNow');
+  if ((p.payments.find((x) => x.milestone === 'token')?.status) !== 'paid') throw new ApiError('pay.inOrder');
+  row.status = 'paid'; row.time = Date.now(); row.ref = `NBFC${Date.now().toString().slice(-8)}`; row.method = 'nbfc';
+  p.emi = { ...p.emi, status: 'active', disbursed_time: Date.now(), schedule_start: Date.now() };
+  await db.put('projects', p);
+  await logEvent(p.id, 'payment.paid', { note: `delivery:${row.amount}` });
+  await logEvent(p.id, 'emi.disbursed');
+}
+
+export function emiPlan(emi) {
+  if (!emi || !['approved', 'active'].includes(emi.status)) return [];
+  return emiSchedule(emi.amount, emi.months, emi.rate || 14, emi.schedule_start || emi.decided_time || Date.now());
 }
 
 // ---------- rider: duty, routes, lead capture ----------

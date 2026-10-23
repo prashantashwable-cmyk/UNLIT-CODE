@@ -3,6 +3,7 @@ import * as api from '../api.js';
 import { t, L, formatINR } from '../i18n.js';
 import { h, nextStepCard, routineStrip, bigButton, emptyState, showError, toast, card } from '../ui.js';
 import { feedback } from '../feedback.js';
+import { icon } from '../icons.js';
 import { roleGroup, projectCard, sectionTitle } from './common.js';
 import { openHelp } from './help.js';
 
@@ -23,6 +24,7 @@ export default async function home(ctx) {
   const node = h('div', { class: 'today' });
   let voice;
   try {
+    await api.salesTick().catch(() => 0); // system catch-up: reminders, container arrival, unpaid countdown
     const step = await api.nextStep();
     const earn = await earnText(role, step);
     let title; let who = null; let colour = 'green'; let action = null;
@@ -79,6 +81,24 @@ export default async function home(ctx) {
     }
 
     const projects = await api.listProjects();
+
+    // Supplier: just-in-time alerts by project stage. NBFC: loan requests waiting.
+    if (role === 'supplier') {
+      const jit = projects.filter((p) => p.stage >= 9 && p.stage <= 12);
+      if (jit.length) {
+        node.append(sectionTitle(t('jit.title'), 'bell'));
+        jit.forEach((p) => node.append(card(h('div', { class: 'kv' }, icon(p.stage === 11 ? 'hourglass' : 'truck'), h('strong', {}, p.code), h('span', {}, t(`jit.s${p.stage}`))),
+          { colour: p.stage === 12 || p.stage === 9 ? 'yellow' : 'blue', onClick: () => { location.hash = `#/project/${p.id}`; }, testid: `jit-${p.id}` })));
+      }
+    }
+    if (role === 'nbfc') {
+      const asks = projects.filter((p) => p.emi?.status === 'applied');
+      node.append(sectionTitle(t('emi.requests'), 'bank'));
+      if (!asks.length) node.append(emptyState('bank', t('next.empty.nbfc')));
+      asks.forEach((p) => node.append(card(h('div', { class: 'kv' }, icon('bank'), h('strong', {}, p.code), h('span', {}, formatINR(p.emi.amount))),
+        { colour: 'yellow', onClick: () => { location.hash = `#/project/${p.id}`; }, testid: `loan-${p.id}` })));
+    }
+
     node.append(sectionTitle(t(role === 'customer' ? 'today.myLifts' : 'today.projects'), 'list'));
     if (!projects.length) node.append(emptyState('building', t(`next.empty.${group}`)));
     const rank = { red: 0, yellow: 1, green: 2 };

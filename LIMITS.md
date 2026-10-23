@@ -15,6 +15,7 @@
 | Persistent "On duty" notification | Needs a push server / native code for true persistence. | System notification via the service worker when the app is in the background and permission is granted (Phase 2 adds the duty notification). |
 | Marathi voice | Many cheap phones have no Marathi TTS voice. | Falls back to a Hindi voice (reads Devanagari well); all text is still on screen with pictures. |
 | Speech recognition | Chrome/Android only; often needs network. | Mic buttons are hidden where unsupported; number pad and tap always work. |
+| Container GPS lock and CCTV | Needs the IoT lock and tracker hardware with their cloud API. | Simulated: position moves from supplier to site until the ETA; keys and opening are enforced by the api; CCTV uses the phone camera for 10 s, or saves a marked placeholder clip. The lock adapter is the place to plug the real device in. |
 | Payments | A browser cannot confirm a real UPI payment by itself. | `js/payments.js` adapter: demo asks Success/Fail; a real aggregator (e.g. Razorpay Route) must confirm by server webhook before the payment is marked paid. |
 | SMS OTP, eSign, UPI, WhatsApp, masked calls | Need licensed providers. | Simulated in demo (OTP 123456, masked bridge number logged, etc.) behind api functions so real providers plug in. |
 | Map tiles offline | Tiles come from OpenStreetMap. | Every tile viewed is cached by the service worker (up to 1,500); the list of sites always works offline. |
@@ -38,3 +39,7 @@
 12. **Self-approval for inspections.** "Whoever created evidence cannot approve it" is applied per gate to the evidence that gate checks (QC clearance checks the customer's readiness photos; QC/peer checks check installation photos). An inspector's own measurement photos are inspection records, so a QC can still photograph and approve the shaft.
 13. **Gates after a step back.** When a project goes back (QC rejects the site), only proofs made after it re-entered the stage count.
 14. **Agreement PDF.** The agreement is shown and read aloud in the app; the PDF version comes with the other PDFs in Phase 6 (jsPDF).
+15. **Supplier share.** The spec says "70% in; supplier share" without the split: the supplier's supply price is booked as payable 75 % when the delivery stage passes and 25 % when the cabin stage passes (setting `supplier_split`).
+16. **After an unpaid return** the project goes back to stage 10; packing photos must be taken again before the container is sent again (its contents are re-checked).
+17. **Cabin shipping** is immediate in the demo (one tap by the supplier marks it shipped and at site).
+18. **Undo vs. switching person.** Any action still in its 10-second Undo window is committed, as the person who made it, before a role or person switch.

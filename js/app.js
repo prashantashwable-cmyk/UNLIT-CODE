@@ -54,6 +54,8 @@ let renderSeq = 0;
 async function render() {
   const seq = ++renderSeq;
   stopSpeaking();
+  // A bottom sheet belongs to the screen that opened it: close it when the screen changes.
+  document.querySelectorAll('.sheet, .sheet-backdrop').forEach((el) => el.remove());
   let { name, params } = parseHash();
   const mode = api.getMode();
   const user = api.currentUser();
@@ -236,7 +238,8 @@ async function boot() {
   window.addEventListener('hashchange', render);
   onLangChange(() => render());
   api.onChange((what) => {
-    if (what === 'session') navigate('#/today');
+    if (what === 'before-session') flushUndo();
+    else if (what === 'session') navigate('#/today');
     else if (what === 'outbox') updateOfflineBadge();
   });
   window.addEventListener('online', updateOfflineBadge);

@@ -127,7 +127,8 @@ const MATRIX = {
   },
   'evidence.capture': {
     rider: riderLeadOpen,
-    customer: (u, p) => isCustomer(u, p) && p.stage === 7,
+    // Readiness photos (7) and missing/damaged material at delivery (11, 12).
+    customer: (u, p) => isCustomer(u, p) && [7, 11, 12].includes(p.stage),
     trainee: isTeamWorker, technician: isTeamWorker, senior: isTeamWorker,
     qc: isQC,
     supplier: (u, p) => isSupplier(u, p) && p.stage >= 9 && p.stage <= 12,

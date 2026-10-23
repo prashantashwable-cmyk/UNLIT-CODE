@@ -19,6 +19,9 @@ export const DEFAULT_RULES = {
   unpaid_return_hours: 2,
   technician_per_lift: 45000,
   rider_daily_target: 5,
+  supplier_split: { delivery: 75, cabin: 25 },
+  nbfc_rate_pct: 14,
+  container_eta_hours: 3,
 };
 
 const N = (en, mr, hi) => ({ en, mr, hi });
@@ -200,7 +203,10 @@ function buildProjects(now) {
   P.push(baseProject(8, 'wakad', 11, now, {
     lead: { rider_id: 'u_r2', consent: { type: 'voice', time: now - 50 * D }, duplicates: [], ai_check: 'pass', in_geofence: true }, customer_id: 'u_c3', sales: passedSales, quote_history: quotes(8), price: sold(8),
     agreement: { read_aloud: true, voice_yes: true, signatures: [{ by: 'u_c3', method: 'esign', time: now - 40 * D }] }, permits: { erection_no: 'EP/PUN/2026/0377' },
-    drawings: { released: true }, supply: { dispatch_date: now - 1 * D }, container: { id: 'CNT-108', sealed: true, online: true, gps_track: [], lock_events: [] },
+    drawings: { released: true }, supply: { dispatch_date: now - 1 * D, accepted: now - 4 * D }, container: {
+      id: 'CNT-108', sealed: true, online: true, seal_no: 'SEAL-40871', lock: 'locked', gps_track: [], lock_events: [],
+      from: { lat: AREAS.moshi.lat, lng: AREAS.moshi.lng }, dispatched_time: now - 4 * H, eta: now - 40 * 60 * 1000, arrived_time: now - 40 * 60 * 1000,
+    },
     team: { lead_tech: 'u_tech1', techs: ['u_t2'], qc_id: 'u_qc1', supplier_id: 'u_s1', coordinator_id: 'u_coord' },
     payments: payments(11, now, { unpaidDelivery: true }), flags: { waiting: true, unpaid_since: now - 40 * 60 * 1000 }, stage_since: now - 3 * H,
   }));

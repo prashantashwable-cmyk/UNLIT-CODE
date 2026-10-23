@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import { startDemo, watchErrors } from './helpers.js';
 
 // Latin words allowed inside Marathi/Hindi screens: brand, codes and common acronyms.
-const ALLOWED = new Set(['AIEC', 'PUN', 'QC', 'GPS', 'AMC', 'EMI', 'NOC', 'KYC', 'SMS', 'OTP', 'PIN', 'WhatsApp', 'Manager', 'OpenStreetMap', 'Leaflet', 'EP', 'LIC', 'CNT', 'UTC', 'IST', 'English']);
+const ALLOWED = new Set(['AIEC', 'PUN', 'QC', 'GPS', 'AMC', 'EMI', 'NOC', 'KYC', 'SMS', 'OTP', 'PIN', 'WhatsApp', 'Manager', 'OpenStreetMap', 'Leaflet', 'EP', 'LIC', 'CNT', 'UTC', 'IST', 'English', 'UPI', 'BOM', 'CCTV', 'MCB', 'SS', 'MS', 'SOP', 'GRAS', 'DEMO', 'SEAL', 'NBFC']);
 
 async function strayWords(page) {
   const text = await page.locator('#app').innerText();
@@ -12,7 +12,7 @@ async function strayWords(page) {
 }
 
 for (const lang of ['mr', 'hi']) {
-  for (const id of ['u_r1', 'u_tech1', 'u_c1', 'u_admin', 'u_owner', 'u_s1', 'u_qc1', 'u_app1', 'u_neg', 'u_c2', 'u_qc2']) {
+  for (const id of ['u_r1', 'u_tech1', 'u_c1', 'u_admin', 'u_owner', 'u_s1', 'u_qc1', 'u_app1', 'u_neg', 'u_c2', 'u_qc2', 'u_nbfc', 'u_c3']) {
     test(`${lang}: every tab fully translated for ${id}`, async ({ page }) => {
       const errors = watchErrors(page);
       await startDemo(page, id, { lang });

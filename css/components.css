@@ -436,3 +436,21 @@ button.card { cursor: pointer; font: inherit; }
 .qc-item-text { font-weight: 700; display: flex; align-items: center; gap: 6px; }
 .crit { color: var(--t-stop); }
 .drawing { color: var(--text); background: var(--card-solid); border-radius: var(--radius-sm); padding: 8px; overflow-x: auto; }
+
+/* ---------- supply & container ---------- */
+.bom { list-style: none; padding: 0; margin: 0; }
+.bom li { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.bom-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.bom-line > span { flex: 1; font-weight: 600; }
+.bom-line.done > .ic { color: var(--t-do); }
+.bom-line.bad > .ic { color: var(--t-stop); }
+.bom-line .big-btn.small, .bom-line .choices { flex: 1 1 100%; margin: 4px 0 0; }
+.map.small { height: 220px; min-height: 200px; margin: 8px 0; }
+.keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: var(--gap) 0; }
+.key { display: grid; justify-items: center; gap: 4px; padding: 10px 4px; border-radius: var(--radius-sm); background: var(--c-neutral); color: var(--on-neutral); font-weight: 700; text-align: center; }
+.key.on { background: var(--c-do); color: var(--on-do); }
+.key .ic { width: 36px; height: 36px; }
+.lock-log summary { min-height: 44px; display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 700; }
+.lock-log ol { margin: 0; padding-left: 20px; font-size: var(--fs-sm); }
+.emi-plan summary { min-height: 44px; display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 700; }
+.cctv-dot { color: #e53935; animation: pulse 1s infinite; border-radius: 50%; margin-top: 15vh; }

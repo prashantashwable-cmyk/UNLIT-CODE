@@ -42,7 +42,7 @@ body.field { --tap: max(64px, calc(var(--s) * 72px)); }
 /* Tablet: two columns for lists. */
 @media (min-width: 768px) {
   .screen { max-width: 980px; }
-  .today, .chat-list, .money-screen, .settings, .map-list, .buckets { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); align-items: start; }
+  .today, .chat-list, .money-screen, .settings, .map-list, .buckets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap); align-items: start; }
   .today > .next-step, .today > .routine, .today > .section-title, .today > .primary-zone,
   .money-screen > .section-title, .money-screen > .money, .money-screen > .table-wrap,
   .settings > .section-title, .settings > .choices, .settings > .danger-zone, .settings > .theme-grid, .settings > .scale,

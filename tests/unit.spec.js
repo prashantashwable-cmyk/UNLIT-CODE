@@ -160,7 +160,7 @@ test.describe('stage engine', () => {
   });
 
   test('approval gates need the right role; payment gates need paid status', () => {
-    const p = { id: 'x', stage: 12, payments: [{ milestone: 'cabin', status: 'due' }] };
+    const p = { id: 'x', stage: 12, cabin: { arrived_time: 1 }, payments: [{ milestone: 'cabin', status: 'due' }] };
     const ap = { project_id: 'x', gate_key: 'cabin.handover', role: 'customer' };
     expect(checkGate(p, { approvals: [ap] }).ok).toBe(false);
     const paid = { ...p, payments: [{ milestone: 'cabin', status: 'paid' }] };
@@ -376,5 +376,41 @@ test.describe('shaft drawing', () => {
     expect(svg).toContain('1250');
     expect(svg).toContain('G+5');
     expect(svg.startsWith('<svg')).toBe(true);
+  });
+});
+
+test.describe('supply rules', () => {
+  test('three keys within 30 minutes + payment, or offline code + customer and technician', async () => {
+    const { validKeys, canUnlock } = await import('../js/supply.js');
+    const now = Date.now();
+    const k = (key_role, ago) => ({ type: 'key', key_role, time: now - ago * 60000 });
+    expect(validKeys([k('customer', 5), k('technician', 3), k('admin', 1)], now)).toEqual(['customer', 'technician', 'admin']);
+    expect(validKeys([k('customer', 31), k('technician', 3), k('admin', 1)], now)).toEqual(['technician', 'admin']);
+    // An open or close resets the keys.
+    expect(validKeys([k('customer', 5), { type: 'close', time: now - 4 * 60000 }, k('admin', 1)], now)).toEqual(['admin']);
+    expect(canUnlock({ deliveryPaid: false, keys: ['customer', 'technician', 'admin'] }).why).toBe('container.payFirst');
+    expect(canUnlock({ deliveryPaid: true, keys: ['customer', 'technician'] }).why).toBe('container.needKeys');
+    expect(canUnlock({ deliveryPaid: true, keys: ['customer', 'technician', 'admin'] }).ok).toBe(true);
+    expect(canUnlock({ deliveryPaid: true, keys: ['customer', 'technician'], offlineCodeOk: true }).ok).toBe(true);
+    expect(canUnlock({ deliveryPaid: true, keys: ['technician'], offlineCodeOk: true }).ok).toBe(false);
+  });
+  test('BOM and container position', async () => {
+    const { bomFor, containerPosition } = await import('../js/supply.js');
+    const bom = bomFor({ floors: 5, stops: 6 });
+    expect(bom.find((l) => l.key === 'rails').qty).toBe(10);
+    expect(bom.find((l) => l.key === 'doors').qty).toBe(6);
+    const c = { from: { lat: 18.6, lng: 73.8 }, dispatched_time: 1000, eta: 1100 };
+    expect(containerPosition(c, { lat: 18.7, lng: 73.9 }, 1050).lat).toBeCloseTo(18.65, 5);
+    expect(containerPosition({ ...c, arrived_time: 1100 }, { lat: 18.7, lng: 73.9 }, 1120).progress).toBe(1);
+  });
+  test('EMI maths', async () => {
+    const { emiAmount, emiSchedule } = await import('../js/supply.js');
+    const emi = emiAmount(600000, 24, 14);
+    expect(emi).toBeGreaterThan(28790);
+    expect(emi).toBeLessThan(28830);
+    const rows = emiSchedule(600000, 24, 14, 0);
+    expect(rows).toHaveLength(24);
+    expect(rows[23].balance).toBe(0);
+    expect(rows.reduce((s, r) => s + r.principal, 0)).toBe(600000);
   });
 });

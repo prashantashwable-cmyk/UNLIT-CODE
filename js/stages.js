@@ -82,7 +82,7 @@ export const STAGES = [
     ],
   },
   {
-    n: 11, key: 'delivery', owners: ['customer', 'technician', 'senior', 'admin'], limit: 'eod',
+    n: 11, key: 'delivery', owners: ['customer', 'technician', 'senior', 'admin'], limit: 'eod', money: 'delivery',
     reqs: [
       payment('delivery'),
       field('container.unlocked', (p) => !!p.container?.unlocked),
@@ -92,8 +92,8 @@ export const STAGES = [
     ],
   },
   {
-    n: 12, key: 'cabin', owners: ['customer'], limit: 'eod',
-    reqs: [payment('cabin'), approval('cabin.handover', ['customer'])],
+    n: 12, key: 'cabin', owners: ['customer'], limit: 'eod', money: 'cabin',
+    reqs: [field('cabin.arrived', (p) => !!p.cabin?.arrived_time), payment('cabin'), approval('cabin.handover', ['customer'])],
   },
   {
     n: 13, key: 'install', owners: ['technician', 'senior'], limitH: 14 * 24, clock: 'install',

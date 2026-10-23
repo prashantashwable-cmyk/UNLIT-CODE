@@ -262,8 +262,12 @@ function noteFor(e) {
     const [m, amt] = e.note.split(':');
     return `${t(`milestone.${m}`)} · ${formatINR(Number(amt))}`;
   }
+  if (e.action === 'supply.accepted') return t('supply.days', { n: e.note });
+  if (e.action === 'container.key') return t(`container.key.${e.note}`);
+  if (e.action === 'container.open') return t(`container.m.${e.note}`);
+  if (e.action === 'bom.ok' || e.action === 'bom.claim') return t(`bom.${e.note}`);
   if (e.action === 'qc.reject') return e.note.split(',').map((k) => t(`chk.${k}`)).join(', ');
-  if (['qc.assigned', 'agreement.read', 'qc.checklist', 'drawings.released', 'agreement.yes', 'agreement.esign'].includes(e.action)) return null;
+  if (['supplier.assigned', 'container.sealed', 'container.dispatched', 'container.arrived', 'container.returned', 'container.code', 'container.close', 'cabin.arrived', 'emi.applied', 'emi.approved', 'emi.rejected', 'emi.disbursed', 'qc.assigned', 'agreement.read', 'qc.checklist', 'drawings.released', 'agreement.yes', 'agreement.esign'].includes(e.action)) return null;
   if (e.action === 'bot.whatsapp' || e.action === 'bot.call' || e.action === 'bot.quote' || e.action === 'sales.cold' || e.action === 'lead.revisit') return null;
   if (e.action === 'lead.capture') return null;
   return e.note; // typed reason or bridge number

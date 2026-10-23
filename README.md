@@ -4,7 +4,7 @@ Installable, offline-first web app for AIEC (Pune): one Project record per lift,
 first lead photo to the last AMC visit. Built for people who cannot read well: every field
 screen **speaks first**, uses **pictures + colours**, big buttons and **zero typing**.
 
-> Status: Phases **1 – Foundation**, **2 – Rider**, **3 – Sales** and **4 – Agreement → QC clearance** done (see "What's done"). Phases 5–9 follow, one at a time.
+> Status: Phases **1 – Foundation**, **2 – Rider**, **3 – Sales**, **4 – Agreement → QC clearance** and **5 – Supply & delivery** done (see "What's done"). Phases 6–9 follow, one at a time.
 
 ## Run it
 
@@ -138,6 +138,27 @@ with resident tickets (0012). Ledger entries exist in every bucket and riders ha
 - **Cancel after token** (Admin, with reason): refund follows the settings rule (default: only if QC
   rejected the site).
 
+## What's done (Phase 5 – Supply & delivery)
+
+- **Supplier**: assigned automatically at stage 9; Today shows just-in-time alerts by project stage.
+  Accepts the production order with a dispatch date (3 / 5 / 7 days); packs **every BOM line with a
+  photo** plus the **challan photo**, then **seals** the GPS-lock container; dispatches (stage 10 → 11).
+  Own invoices appear in Money (supplier share booked when delivery and cabin stages pass).
+- **Container**: live position on a map (simulated GPS from supplier to site, ETA), status, seal number
+  and the full lock history. Customer sees it live.
+- **Three-key unlock**: delivery payment (70 %, UPI or the NBFC loan) **and** customer + technician +
+  admin keys, each with a face check, all within 30 minutes; a CCTV clip records while it opens (device
+  camera, or a marked placeholder). Unlock is refused by the api otherwise.
+- **Lock offline**: Admin gives a 6-digit code valid 15 minutes, single use; customer and technician face
+  keys still required.
+- **Not paid at delivery**: 2-hour countdown on screen, reminders at 30/60/90 minutes, then the container
+  **returns to the supplier** and the project goes back to dispatch (red, issue opened).
+- **BOM check** at delivery (customer or technician): OK per line, or missing/damaged with a photo →
+  supplier claim. Then material handover signed by customer + technician.
+- **Cabin (stage 12)**: supplier sends the cabin, customer pays 20 % and signs the cabin handover.
+- **EMI**: customer applies (12/24/36 months, consent to share data); NBFC approves/rejects, sees and
+  shows the EMI schedule, and pays the delivery share straight to AIEC when the container is at site.
+
 ## Folder
 
 ```
@@ -180,6 +201,9 @@ npx playwright test
   (below floor refused) → accept; quote guard per role incl. Owner; cold after 3 reminders → revisit pin.
 - `agreement.spec.js` – stage 4 → 8 only with every proof (agreement, failed + successful UPI, permit,
   readiness, QC reject → fix list → redo → measure, release drawings, approve), cancel/refund, reminders.
+- `supply.spec.js` – unlock impossible without payment + 3 keys (incl. a key older than 30 min), CCTV,
+  BOM check + claim, handovers, cabin, supplier invoices; unpaid 2 h → container returns; offline code;
+  supplier order → packing photos → challan → seal → dispatch → arrival; EMI approve / schedule.
 - `pwa.spec.js` – Chrome installability check (no errors), works offline after first load, real-mode install gate.
 
 After editing shell files run `node tools/gen-precache.mjs` (a test fails if the list is stale).

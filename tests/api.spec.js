@@ -102,3 +102,15 @@ test('stage cannot move without its gate, and only the stage owner moves it', as
   await api(page, (a) => a.demoLogin('u_c1'));
   await expectDenied(page, (a) => a.advanceStage('p0004'));
 });
+
+test('an action still in its Undo window commits as the person who made it, even after switching', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('aiec.undoMs', '20000'));
+  await startDemo(page, 'u_c3');
+  await page.evaluate(async () => {
+    const ui = await import('/js/ui.js');
+    const a = await import('/js/api.js');
+    ui.undoable({ label: 'x', commit: () => a.sendMessage('p0008', 'main', { type: 'text', text: 'from customer' }) });
+    await a.demoLogin('u_tech1');
+  });
+  await expect.poll(async () => (await api(page, (a) => a.listMessages('p0008', 'main'))).find((m) => m.content === 'from customer')?.by).toBe('u_c3');
+});
