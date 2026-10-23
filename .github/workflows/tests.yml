@@ -1,0 +1,44 @@
+# Runs the whole Playwright suite on every push and pull request.
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Imports resolve
+        run: node tools/check-imports.mjs
+      - name: Generated files are current
+        run: |
+          node tools/gen-precache.mjs
+          node tools/gen-preload.mjs
+          node tools/gen-remote.mjs
+          git diff --exit-code sw.js index.html js/api-remote.js || (echo "::error::Run node tools/gen-precache.mjs, gen-preload.mjs and gen-remote.mjs, then commit sw.js, index.html and js/api-remote.js" && exit 1)
+      - name: Playwright
+        run: npx playwright test
+      - name: Upload screenshots and failure traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-${{ github.run_number }}
+          path: |
+            screenshots/latest/
+            test-results/
+          retention-days: 14
+          if-no-files-found: ignore

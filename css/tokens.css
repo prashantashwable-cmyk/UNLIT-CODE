@@ -1,0 +1,108 @@
+/* Design tokens per theme. Status colours are fixed in meaning:
+   green = do/done, yellow = waiting, red = stopped/help, blue = info. Never decoration. */
+
+@font-face {
+  font-family: 'Noto Sans Devanagari';
+  src: url('../vendor/fonts/noto-sans-devanagari-devanagari-400-normal.woff2') format('woff2');
+  font-weight: 400; font-display: swap;
+  unicode-range: U+0900-097F, U+1CD0-1CF9, U+200C-200D, U+20A8, U+20B9, U+25CC, U+A830-A839, U+A8E0-A8FF;
+}
+@font-face {
+  font-family: 'Noto Sans Devanagari';
+  src: url('../vendor/fonts/noto-sans-devanagari-devanagari-700-normal.woff2') format('woff2');
+  font-weight: 600 700; font-display: swap;
+  unicode-range: U+0900-097F, U+1CD0-1CF9, U+200C-200D, U+20A8, U+20B9, U+25CC, U+A830-A839, U+A8E0-A8FF;
+}
+
+:root {
+  --ui-scale: 1;
+  --s: var(--ui-scale);
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans Devanagari', 'Noto Sans', sans-serif;
+
+  --radius: calc(var(--s) * 20px);
+  --radius-sm: calc(var(--s) * 12px);
+  --gap: calc(var(--s) * 12px);
+  --pad: calc(var(--s) * 16px);
+  --fs: calc(var(--s) * 17px);
+  --fs-sm: calc(var(--s) * 14px);
+  --fs-lg: calc(var(--s) * 21px);
+  --fs-xl: calc(var(--s) * 28px);
+  /* Touch targets never shrink below 48 px (64 px on field screens, see base.css). */
+  --tap: max(48px, calc(var(--s) * 52px));
+  --tabbar-h: max(56px, calc(var(--s) * 66px));
+  --topbar-h: max(48px, calc(var(--s) * 56px));
+
+  /* Light Glass (default) */
+  --bg: #f4f6fb;
+  --bg-image: radial-gradient(1200px 600px at 10% -10%, #ffffff 0%, transparent 60%);
+  --card: rgba(255, 255, 255, 0.72);
+  --card-solid: #ffffff;
+  --card-border: rgba(255, 255, 255, 0.9);
+  --blur: saturate(160%) blur(18px);
+  --shadow: 0 8px 28px rgba(28, 39, 64, 0.10), 0 1px 2px rgba(28, 39, 64, 0.06);
+  --text: #141a24;
+  --muted: #4d5a6c;
+  --line: rgba(20, 26, 36, 0.10);
+
+  --c-do: #1b7a34;     --on-do: #ffffff;
+  --c-wait: #f2b400;   --on-wait: #1a1400;
+  --c-stop: #c62828;   --on-stop: #ffffff;
+  --c-info: #1e5bb8;   --on-info: #ffffff;
+  --c-neutral: #e6e9ef; --on-neutral: #1c2330;
+  --t-do: #17692c; --t-wait: #7a5a00; --t-stop: #b3261e; --t-info: #1a4f9e;
+
+  --coin: #f4c430; --coin-dark: #b8860b;
+  --focus: #1e5bb8;
+  --ribbon: #ffd400; --on-ribbon: #1a1400;
+}
+
+[data-theme='colour-glass'] {
+  --bg: #e7ecff;
+  --bg-image: linear-gradient(160deg, #dfe9ff 0%, #f6e7ff 45%, #e2fff4 100%);
+  --card: rgba(255, 255, 255, 0.62);
+  --card-border: rgba(255, 255, 255, 0.85);
+  --shadow: 0 10px 30px rgba(60, 40, 120, 0.14);
+  --text: #171433;
+  --muted: #4b4870;
+  --c-neutral: #ece9ff;
+}
+
+[data-theme='outdoor'] {
+  --bg: #000000;
+  --bg-image: none;
+  --card: #000000;
+  --card-solid: #000000;
+  --card-border: #ffffff;
+  --blur: none;
+  --shadow: none;
+  --text: #ffffff;
+  --muted: #ffffff;
+  --line: #ffffff;
+  --c-do: #00e676;   --on-do: #000000;
+  --c-wait: #ffea00; --on-wait: #000000;
+  --c-stop: #ff3d3d; --on-stop: #000000;
+  --c-info: #40c4ff; --on-info: #000000;
+  --c-neutral: #ffffff; --on-neutral: #000000;
+  --t-do: #00e676; --t-wait: #ffea00; --t-stop: #ff5c5c; --t-info: #40c4ff;
+  --focus: #ffea00;
+}
+
+[data-theme='dark'] {
+  --bg: #0e1116;
+  --bg-image: radial-gradient(900px 500px at 0% 0%, #1a2230 0%, transparent 60%);
+  --card: rgba(28, 34, 45, 0.78);
+  --card-solid: #1c222d;
+  --card-border: rgba(255, 255, 255, 0.08);
+  --shadow: 0 8px 26px rgba(0, 0, 0, 0.45);
+  --text: #eef2f8;
+  --muted: #a9b4c4;
+  --line: rgba(255, 255, 255, 0.12);
+  /* white labels ≥ 4.5:1 on these, and each colour ≥ 3:1 against the dark page */
+  --c-do: #23843f;   --on-do: #ffffff;
+  --c-wait: #f2b400; --on-wait: #1a1400;
+  --c-stop: #cc3333; --on-stop: #ffffff;
+  --c-info: #2f6cd0; --on-info: #ffffff;
+  --c-neutral: #2a3240; --on-neutral: #eef2f8;
+  --t-do: #6fd38c; --t-wait: #ffd257; --t-stop: #ff8a80; --t-info: #8cb8ff;
+  --focus: #8cb8ff;
+}
