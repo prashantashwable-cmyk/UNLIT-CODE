@@ -573,6 +573,7 @@ export default {
   'audit.help.callback': 'Call back asked',
 
   'error.generic': 'Something went wrong. Please try again or press Help.',
+  'error.offlineServer': 'Cannot reach the AIEC server. Check the internet and try again.',
   'error.permission': 'You are not allowed to do this.',
   'error.noUser': 'Person not found.',
   'error.notFound': 'Not found.',

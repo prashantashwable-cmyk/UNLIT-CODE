@@ -38,8 +38,11 @@ export function speak(text, { lang = getLang() } = {}) {
 }
 
 // Auto voice when a screen opens (setting can turn it off).
+// A redraw caused by another phone's change is silent: the screen did not "open".
+let hushed = false;
+export function hushAuto(on) { hushed = on; }
 export function autoSpeak(text) {
-  if (getPref('autoVoice')) speak(text);
+  if (getPref('autoVoice') && !hushed) speak(text);
 }
 
 export function stopSpeaking() { try { synth?.cancel(); } catch { /* ignore */ } }

@@ -261,6 +261,41 @@ with resident tickets (0012). Ledger entries exist in every bucket and riders ha
 - **Empty and error states** are in the screenshot pass (unknown project, no service plan, empty chat).
 - `tools/serve.mjs` gzips text like a real static host; `tools/gen-preload.mjs` writes the preload list.
 
+## Server (shared database for many phones)
+
+Without a server every phone keeps its own data (good for a demo, not for a company). `server/`
+turns the same app into a shared system: customer, technician and admin on three phones see one
+project, and a key turned on one phone lights up on the others within a second.
+
+```bash
+node server/main.mjs                 # demo server on http://localhost:8080 (seeded Pune data)
+PORT=80 AIEC_DB=/var/aiec/aiec.db AIEC_SECRET=<long random> node server/main.mjs
+```
+
+- **Same rules, enforced where the phone cannot reach them.** The server runs the very same
+  `js/api.js` (every permission, gate and three-key rule already under test) on SQLite (built into
+  Node 22, no packages). The phone only gets `js/api-remote.js` – an import map swaps it in – which
+  turns each call into a request. Who is calling comes from a server-signed token (HMAC, 30 days),
+  never from the phone; GPS and selfies still come from the phone.
+- **Append-only in the database itself.** Events, evidence, files, approvals and messages are
+  protected by SQLite triggers: no UPDATE or DELETE, even by hand – only an empty server time can be
+  filled once.
+- **Live updates.** `/api/events` (server-sent events) tells every open phone that something changed;
+  each redraws quietly, but not while a sheet, camera, recorder or form is open, or a box has focus.
+- **PDFs** (agreement, material, handover, NOC): the server checks who may see one and sends its
+  contents; the phone draws the PDF (Devanagari needs a canvas, which the server has not).
+- **Real mode** (`AIEC_DEMO=0`) refuses to start until real SMS-OTP and face-match providers are
+  plugged in, because the demo OTP and selfie check would let anyone sign in as anyone.
+  `AIEC_ADMIN_PHONE` creates the first Admin. Demo-only calls (demo login, reset, clock buttons) do
+  not exist there.
+- **Deploy**: any small Linux VM or container with Node 22, behind HTTPS
+  (Caddy or nginx with Let's Encrypt – phones only install a PWA from HTTPS). Back up the one
+  `.db` file nightly (`sqlite3 aiec.db ".backup …"`). `tools/gen-remote.mjs` regenerates the call list
+  when `api.js` gains a function (CI checks it).
+- **Why not Supabase/Firebase?** They would mean rewriting ≈ 3,000 lines of tested rules as database
+  policies and functions, and keeping two copies in step. Running the tested `api.js` itself keeps one
+  copy; if the company outgrows one server, the same `db-sqlite.mjs` interface can sit on Postgres.
+
 ## Folder
 
 ```
@@ -273,8 +308,10 @@ icons/      logo.svg, maskable.svg, PNG icons
 vendor/     leaflet/ (1.9.4), fonts/ (Noto Sans Devanagari 400/700, @fontsource 5.1.0),
             tesseract/ (tesseract.js 5.1.1, core 5.1.1 LSTM, eng 4.0.0_best_int),
             jspdf/ (jsPDF 2.5.1, MIT), qrcode/ (qrcode-generator 1.4.4, MIT)
+server/     main.mjs (HTTP + RPC + live events), db-sqlite.mjs (append-only SQLite), hooks.mjs
 tests/      Playwright tests (dev only)
-tools/      serve.mjs, gen-precache.mjs, make-icons.mjs, check-imports.mjs (dev only)
+tools/      serve.mjs, gen-precache.mjs, gen-preload.mjs, gen-remote.mjs, make-icons.mjs,
+            check-imports.mjs (dev only)
 ```
 
 jsPDF (≈360 KB) and qrcode are in the offline shell and loaded only when a PDF or QR code is made. Tesseract (≈7 MB) is cached by the service worker in the background after install, so the
@@ -288,6 +325,9 @@ node tools/check-imports.mjs
 npx playwright test
 ```
 
+- `server.spec.js` – runs against `server/main.mjs` (fresh in-memory database): three phones unlock one
+  container together and see each other's keys live; PDFs drawn on the phone; forged/missing tokens
+  and server-only calls refused; append-only rows unchangeable even by SQL; real mode without demo calls.
 - `a11y.spec.js`, `voice.spec.js`, `perf.spec.js` – Phase 9 accessibility, voice-only (Marathi) and
   low-end phone checks (see above).
 - `screens.spec.js` – **screenshot pass** (run after every screen/CSS change): 27 key screens for every

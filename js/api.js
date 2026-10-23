@@ -10,7 +10,7 @@ import { checkGate, isStageOwner, nextStage, statusColour, stageDef, stageClock 
 import { bucketTotals, moveEntries, fridayMoves, payableByUser, payoutMoves } from './ledger.js';
 import { ladderChecks, meetsFloor, nextLevel, prevLevel, QUIZ, SAFETY_TEST, scoreAnswers, QUIZ_PASS, DEMOTE_AFTER_DAYS, SKILLS, EXPERIENCE, AVAILABILITY } from './ladder.js';
 import { weightedRating } from './trust.js';
-import { lastKnownFix, setDemoMode, distanceM, GEOFENCE_M, speedKmh, SUSPICIOUS_KMH } from './geo.js';
+import { lastKnownFix, setLastFix, setDemoMode, distanceM, GEOFENCE_M, speedKmh, SUSPICIOUS_KMH } from './geo.js';
 import {
   bomFor, containerPosition, keyRole, validKeys, canUnlock, emiSchedule, emiAmount, OFFLINE_CODE_MS, UNPAID_RETURN_MS, UNPAID_REMINDERS_MIN,
 } from './supply.js';
@@ -87,11 +87,11 @@ function requireLogin() {
   return { user: me, role: session.role };
 }
 
-export async function init() {
+export async function init({ seed = true } = {}) {
   await db.openDB();
   setDemoMode(isDemo());
   // The 'seeded' marker is written last, so a reload in the middle of seeding starts again cleanly.
-  if (!(await db.get('settings', 'seeded'))) {
+  if (seed && !(await db.get('settings', 'seeded'))) {
     await db.clearAll();
     await seedDemo();
   }
@@ -101,6 +101,24 @@ export async function init() {
   }
   window.addEventListener('online', () => sync());
   if (navigator.onLine) sync();
+}
+
+// Server only (never reachable over RPC): run one request as the person in the verified token,
+// from that phone, with that phone's GPS fix. Requests are handled one at a time.
+export async function runAs({ session: s = null, device: dev = 'anon', fix = null } = {}, fn) {
+  const prev = [session, me, device];
+  device = dev;
+  setLastFix(fix);
+  session = s ? { ...s } : null;
+  me = s ? await db.get('users', s.userId) : null;
+  if (me && (!me.roles.includes(s.role) || me.status === 'removed')) { session = null; me = null; }
+  try {
+    const result = await fn();
+    return { result, session: session ? { ...session } : null };
+  } finally {
+    [session, me, device] = prev;
+    setLastFix(null);
+  }
 }
 
 async function startSession(user, role = user.roles[0], extra = {}) {
@@ -165,16 +183,19 @@ export async function requestOtp(phone) {
   return { sent: true };
 }
 
-let otpVerified = null; // phone that passed OTP in this tab
+// Phone that passed OTP, per device (the server serves many phones; the browser is one device).
+const otpPassed = new Map();
+let device = 'local';
+const otpOk = (phone) => otpPassed.get(device) === normPhone(phone);
 
 export async function verifyOtp(phone, otp) {
   if (otp !== DEMO_OTP) throw new ApiError('login.wrongOtp');
-  otpVerified = normPhone(phone);
+  otpPassed.set(device, normPhone(phone));
   return lookupPhone(phone);
 }
 
 export async function setPin(phone, pin) {
-  if (otpVerified !== normPhone(phone)) throw new PermissionError('pin.set', 'otp-first');
+  if (!otpOk(phone)) throw new PermissionError('pin.set', 'otp-first');
   const u = await findByPhone(phone);
   u.pin_hash = await hashPin(u.id, pin);
   await db.put('users', u);
@@ -194,7 +215,7 @@ export async function loginWithPin(phone, pin) {
 
 // After OTP (+PIN), enrol the selfie and log in.
 export async function enrollFaceAndLogin(phone, selfie) {
-  if (otpVerified !== normPhone(phone)) throw new PermissionError('face.enrol', 'otp-first');
+  if (!otpOk(phone)) throw new PermissionError('face.enrol', 'otp-first');
   const u = await findByPhone(phone);
   const fileId = await saveFile(selfie.blob, { kind: 'selfie', owner_id: u.id, sha256: selfie.sha256 });
   u.face_ref = fileId;
@@ -372,6 +393,11 @@ async function saveFile(blob, meta) {
 }
 
 export async function getFileURL(fileId) {
+  return URL.createObjectURL((await fileAccess(fileId)).blob);
+}
+
+// The file record, after the same checks as every other read (the server streams it from here).
+export async function fileAccess(fileId) {
   const { user, role } = requireLogin();
   const f = await db.get('files', fileId);
   if (!f) throw new ApiError('error.notFound');
@@ -385,7 +411,7 @@ export async function getFileURL(fileId) {
   } else if (f.owner_id !== user.id && role !== 'admin') {
     throw new PermissionError('file.view');
   }
-  return URL.createObjectURL(f.blob);
+  return f;
 }
 
 // Same image hash already stored → reject (anti-fraud).
@@ -2590,7 +2616,7 @@ export async function logAmcVisit(projectId, shot) {
 
 export const DOC_KINDS = ['agreement', 'material', 'handover', 'noc'];
 
-export async function getDocument(projectId, kind) {
+async function docProject(projectId, kind) {
   const { user, role } = requireLogin();
   const p = await rawProject(projectId);
   assertCan(user, role, 'project.view', p);
@@ -2601,9 +2627,22 @@ export async function getDocument(projectId, kind) {
   }
   if (kind === 'material' && p.stage < 12) throw new ApiError('doc.notYet');
   if ((kind === 'handover' || kind === 'noc') && !p.noc) throw new ApiError(p.flags?.noc_withheld ? 'noc.withheld' : 'doc.notYet');
+  return p;
+}
+
+export async function getDocument(projectId, kind) {
+  const p = await docProject(projectId, kind);
   const id = await ensureDoc(p, kind);
   await saveProject(p, 'doc');
   return id;
+}
+
+// Server mode: the server has no canvas to draw a PDF (Devanagari text is drawn on one), so it
+// checks who may see the document and sends its contents; the phone draws the PDF.
+export async function getDocumentData(projectId, kind) {
+  const p = await docProject(projectId, kind);
+  if (p.docs?.[kind]) return { fileId: p.docs[kind], data: null };
+  return { fileId: null, data: await docData(p, kind) };
 }
 
 async function ensureDoc(p, kind) {
@@ -2617,6 +2656,10 @@ async function ensureDoc(p, kind) {
 
 async function buildDoc(p, kind) {
   const { documentPdf } = await import('./pdf.js');
+  return documentPdf(await docData(p, kind));
+}
+
+async function docData(p, kind) {
   const { agreementSections } = await import('./docs.js');
   const en = (k, prm) => tr(k, prm, 'en');
   const users = await db.getAll('users');
@@ -2654,11 +2697,11 @@ async function buildDoc(p, kind) {
       ? [...common, { title: en('doc.h.payments'), text: (p.payments || []).map((x) => `${en(`milestone.${x.milestone}`)}: ${formatINRen(x.amount)} – ${en(x.status === 'paid' ? 'money.paid' : 'money.due')}`).join('\n') }]
       : [...common, { title: en('doc.h.noc'), text: en('doc.nocText', { code: p.code, address: addr, customer: cust }) }];
   }
-  return documentPdf({
+  return {
     company: 'ALL INDIA ELEVATORS COMPANY', title: en(`doc.${kind}`), code: p.code, sections, signatures,
     note: en('doc.demoNote'),
     labels: { signatures: en('doc.signatures'), generated: en('doc.generated'), method: en('doc.method'), gps: 'GPS' },
-  });
+  };
 }
 
 const formatINRen = (n) => `Rs ${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
@@ -3169,7 +3212,7 @@ export async function requestJoinOtp(phone) {
 }
 
 export async function applyAsWorker({ phone, name, skill, area, experience, availability }) {
-  if (otpVerified !== normPhone(phone)) throw new PermissionError('join.apply', 'otp-first');
+  if (!otpOk(phone)) throw new PermissionError('join.apply', 'otp-first');
   if (!SKILLS.includes(skill) || !EXPERIENCE.includes(experience) || !AVAILABILITY.includes(availability) || !AREAS[area]) throw new ApiError('join.pickAll');
   if (await findByPhone(phone)) throw new ApiError('join.exists');
   const id = db.uid('u');

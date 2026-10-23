@@ -4,7 +4,7 @@ import { t, L, onLangChange, setLang, getLang, LANG_ORDER, ready as langReady, l
 import { applyAll } from './theme.js';
 import { h, clear, iconButton, flushUndo, sheet, showError, bigButton } from './ui.js';
 import { icon, ROLE_ICON } from './icons.js';
-import { autoSpeak, speak, stopSpeaking } from './voice.js';
+import { autoSpeak, hushAuto, speak, stopSpeaking } from './voice.js';
 import { unlockAudio } from './feedback.js';
 import { isStandalone, captureInstallPrompt } from './screens/install.js';
 import { openHelp } from './screens/help.js';
@@ -58,9 +58,9 @@ let renderSeq = 0;
 let dataReady = Promise.resolve();
 const NEEDS_NO_DATA = new Set(['welcome', 'install', 'guide']);
 
-async function render() {
+async function render({ quiet = false } = {}) {
   const seq = ++renderSeq;
-  stopSpeaking();
+  if (!quiet) stopSpeaking();
   // A bottom sheet belongs to the screen that opened it: close it when the screen changes.
   document.querySelectorAll('.sheet, .sheet-backdrop').forEach((el) => el.remove());
   if (!NEEDS_NO_DATA.has(parseHash().name || 'welcome')) await dataReady;
@@ -230,6 +230,22 @@ function firstTap() {
   window.addEventListener('pointerdown', once, { once: true, capture: true });
 }
 
+// Shared server: another phone changed something. Redraw quietly, but never under the person's
+// fingers – not while a sheet, camera, recorder or step-by-step flow is open, or a box has focus.
+let remoteTimer = null;
+function remoteRefresh() {
+  clearTimeout(remoteTimer);
+  remoteTimer = setTimeout(async () => {
+    const busy = document.querySelector('.sheet, .camera, .recorder, .flow-screen')
+      || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
+    if (busy || document.hidden) { remoteTimer = setTimeout(remoteRefresh, 3000); return; }
+    const y = window.scrollY;
+    hushAuto(true);
+    try { await render({ quiet: true }); } finally { hushAuto(false); }
+    window.scrollTo(0, y);
+  }, 300);
+}
+
 async function boot() {
   applyAll();
   captureInstallPrompt();
@@ -246,6 +262,7 @@ async function boot() {
     if (what === 'before-session') flushUndo();
     else if (what === 'session') navigate('#/today');
     else if (what === 'outbox') updateOfflineBadge();
+    else if (what === 'remote') remoteRefresh();
   });
   window.addEventListener('online', updateOfflineBadge);
   window.addEventListener('online', fillPendingAddresses);

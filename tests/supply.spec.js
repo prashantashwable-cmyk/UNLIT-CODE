@@ -32,6 +32,8 @@ async function payDelivery(page) {
   await expect(page.getByTestId('pay-delivery')).toHaveCount(0, { timeout: 10000 });
 }
 async function approve(page, gate) {
+  // Count only once the project screen is drawn (right after a role switch Today may still be up).
+  await expect(page.locator('main.screen-project .gate-item').first()).toBeVisible({ timeout: 10000 });
   const n = await page.locator('.gate-item.done').count();
   await page.getByTestId(`approve-${gate}`).first().click();
   await face(page);

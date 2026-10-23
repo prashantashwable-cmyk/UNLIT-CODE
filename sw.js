@@ -16,6 +16,7 @@ const PRECACHE = [
   './css/components.css',
   './css/tokens.css',
   './js/aicheck.js',
+  './js/api-remote.js',
   './js/api.js',
   './js/app.js',
   './js/camera.js',

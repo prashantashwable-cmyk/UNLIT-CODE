@@ -66,3 +66,8 @@
 39. **Performance numbers** are measured in desktop Chromium with CPU throttling 4× and slow-3G network emulation; a real ₹8,000 phone can differ. The first visit needs the offline cache (≈ 1.5 MB, downloaded in the background after the first screen) before the app works offline.
 40. **Contrast** is checked automatically on solid colours; text over photos, maps and charts is not measured (photos carry a dark stamp strip for readability).
 41. **Marathi speech** needs a Marathi or Hindi voice on the phone; the test checks what the app asks the phone to say, not the sound itself.
+42. **Server: no offline queue yet.** Served by `server/main.mjs`, the app needs the internet for every change (it says "Cannot reach the AIEC server"); the on-phone outbox works only in the phone-only build. Field workers in basements need it next: queue on the phone, send when back online.
+43. **Server: daily safety PDF.** On the server the daily safety log PDF is not made (no canvas); the safety gate, photos and consents are all recorded. Agreement, material, handover and NOC PDFs work (drawn on the phone), but are not stored with the project, so there is no server-side hash of the PDF itself.
+44. **Server: one request at a time.** Calls are processed in order (`api.js` keeps "who is calling" in one place). Fine for tens of phones; hundreds at once need api.js to take the caller as a parameter.
+45. **Server: demo reset.** On a demo server anyone can press "reset demo" and wipe everyone's demo data (fine for a demo, never on in real mode).
+46. **Server: sign-in.** Real mode is blocked until an SMS-OTP gateway and a face-match API are connected; tokens last 30 days and cannot yet be revoked one by one (changing `AIEC_SECRET` signs everyone out).

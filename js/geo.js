@@ -13,6 +13,8 @@ let lastFix = null;
 export function setDemoMode(on) { demoMode = on; }
 export function setDemoPosition(pos) { if (pos?.lat != null) demoPos = { lat: pos.lat, lng: pos.lng }; }
 export function lastKnownFix() { return lastFix; }
+// Server: the GPS fix the phone sent with this request (stamped on events and signatures).
+export function setLastFix(fix) { lastFix = fix && Number.isFinite(fix.lat) ? fix : null; }
 
 export function distanceM(a, b) {
   const R = 6371000;

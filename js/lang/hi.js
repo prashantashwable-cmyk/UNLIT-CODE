@@ -573,6 +573,7 @@ export default {
   'audit.help.callback': 'फ़ोन की मांग',
 
   'error.generic': 'कुछ ग़लत हुआ. फिर करें या मदद दबाएं.',
+  'error.offlineServer': 'AIEC सर्वर से जुड़ नहीं पा रहे. इंटरनेट देखें और फिर करें.',
   'error.permission': 'आपको यह करने की अनुमति नहीं है.',
   'error.noUser': 'व्यक्ति नहीं मिला.',
   'error.notFound': 'नहीं मिला.',
