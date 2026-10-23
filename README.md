@@ -272,6 +272,9 @@ node tools/check-imports.mjs
 npx playwright test
 ```
 
+- `screens.spec.js` – **screenshot pass** (run after every screen/CSS change): 27 key screens for every
+  role at 360 px, the main ones also at 768 / 1280 px, saved to `screenshots/latest/` with a
+  `contact-sheet.png`; fails on sideways scroll, raw keys or console errors.
 - `control.spec.js` – **acceptance**: Admin runs a full demo day only from the app (queue, pause,
   promotion, override with a second admin, Friday close + payout above ₹50,000 with a second admin,
   rule change approved by the Owner, live map filters, reports, day close → carried items); Join →

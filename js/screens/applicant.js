@@ -60,7 +60,7 @@ function quizSheet(kind, refresh) {
 export async function applicantToday({ user, refresh }) {
   const ob = await api.myOnboarding();
   const learned = new Set(ob.learned || []);
-  const step = (n, done, title, body) => card([h('div', { class: 'kv' }, h('span', { class: `step-num${done ? ' done' : ''}` }, done ? icon('check', 'ic sm') : String(n)), h('strong', {}, title)), body],
+  const step = (n, done, title, body) => card([h('div', { class: 'ob-head' }, h('span', { class: `step-num${done ? ' done' : ''}` }, done ? icon('check', 'ic sm') : String(n)), h('strong', {}, title)), body],
     { colour: done ? 'green' : 'blue', testid: `ob-step-${n}` });
   const verifyBody = ob.verified ? h('p', { class: 'hint' }, t('join.verifiedText')) : h('div', { class: 'btn-row' },
     !ob.aadhaar_last4 ? bigButton({
@@ -81,7 +81,7 @@ export async function applicantToday({ user, refresh }) {
       },
     }) : h('p', { class: 'c-text-green' }, icon('check', 'ic sm'), t('join.faceDone')));
   const learnBody = h('div', {},
-    LEARN.map((st) => h('div', { class: `bom-line${learned.has(st.key) ? ' done' : ''}` }, icon(learned.has(st.key) ? 'check' : 'play'), h('span', {}, t(`sop.${st.key}`)),
+    LEARN.map((st) => h('div', { class: `learn-row${learned.has(st.key) ? ' done' : ''}` }, icon(learned.has(st.key) ? 'check' : 'play'), h('span', {}, t(`sop.${st.key}`)),
       bigButton({ icon: 'play', label: t('sop.watch'), colour: 'blue', small: true, testid: `learn-${st.key}`, onClick: async () => { speak(t(`sop.${st.key}.do`)); try { await api.markLearned(st.key); refresh(); } catch (e) { showError(e); } } }))),
     (ob.quiz ?? 0) >= QUIZ_PASS ? h('p', { class: 'c-text-green' }, icon('check', 'ic sm'), t('join.quizDone', { score: ob.quiz }))
       : bigButton({ icon: 'help', label: t('join.quiz'), colour: 'green', small: true, testid: 'ob-quiz', lockedReason: learned.size < LEARN.length ? t('join.watchFirst') : null, onClick: () => quizSheet('quiz', refresh) }));

@@ -514,8 +514,13 @@ button.card { cursor: pointer; font: inherit; }
 .rule-changes { margin: 0; padding-left: 18px; }
 .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-bottom: var(--gap); }
 .filter { display: flex; flex-direction: column; gap: 2px; font-size: .9em; }
-.step-num { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--c-info); color: var(--on-info, #fff); font-weight: 700; flex: 0 0 auto; }
-.step-num.done { background: var(--c-do); }
+.ob-head .step-num { position: static; display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--c-info); color: var(--on-info, #fff); font-weight: 700; flex: 0 0 auto; }
+.ob-head .step-num.done { background: var(--c-do); }
 .ladder-checks { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 4px; }
 .ladder-checks li { display: flex; align-items: center; gap: 6px; }
 .quiz .choices { margin-top: 8px; }
+.ob-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.ob-head strong { font-size: var(--fs-lg); }
+.learn-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) minmax(0, 140px); gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.learn-row.done > .ic { color: var(--c-do); }
+.learn-row .big-btn { min-height: 56px; }
