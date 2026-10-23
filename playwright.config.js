@@ -6,7 +6,9 @@ export default defineConfig({
   timeout: 60000,
   fullyParallel: false,
   workers: 2,
-  reporter: [['list']],
+  forbidOnly: !!process.env.CI,
+  retries: 0, // a flaky test is a bug to fix, not to retry
+  reporter: process.env.CI ? [['list'], ['github']] : [['list']],
   use: {
     baseURL: 'http://localhost:4173',
     ...devices['Pixel 5'],
