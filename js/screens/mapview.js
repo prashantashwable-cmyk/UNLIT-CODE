@@ -9,6 +9,7 @@ import { leadScore } from '../pricing.js';
 
 export default async function mapview(ctx) {
   if (ctx.role === 'rider') return (await import('./rider/map.js')).default(ctx);
+  if (ctx.role === 'admin') return (await import('./admin/livemap.js')).default(ctx);
   const projects = (await api.listProjects()).filter((p) => p.site?.lat != null);
   // Sales sees open leads sorted by score.
   if (ctx.role === 'negotiator') projects.sort((a, b) => (b.stage <= 4) - (a.stage <= 4) || leadScore(b) - leadScore(a));

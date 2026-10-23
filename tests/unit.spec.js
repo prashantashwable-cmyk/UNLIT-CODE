@@ -5,7 +5,8 @@ import path from 'node:path';
 import { can, viewProject, PermissionError, assertCan, maskPhone, ACTIONS } from '../js/permissions.js';
 import { checkGate, statusColour, STAGES, isStageOwner, progressPct, endOfDayIST } from '../js/stages.js';
 import { weightedRating, trustScore } from '../js/trust.js';
-import { bucketTotals, moveEntries } from '../js/ledger.js';
+import { bucketTotals, moveEntries, fridayMoves, payableByUser, payoutMoves } from '../js/ledger.js';
+import * as lad from '../js/ladder.js';
 import * as sop from '../js/sop.js';
 import * as qcm from '../js/qc.js';
 import { stageClock } from '../js/stages.js';
@@ -542,4 +543,53 @@ test('permissions: rework by the team, inspection and licence by admin, AMC work
   expect(can(tech, 'technician', 'amc.work', p)).toBe(false);
   expect(can(cust, 'customer', 'handover.rate', { ...p, customer_id: 'c1' })).toBe(true);
   expect(can(cust2, 'customer', 'handover.rate', { ...p, customer_id: 'c1' })).toBe(false);
+});
+
+// ---------- Phase 8: payouts and the ladder ----------
+
+test('payout: Option B 70 % payable + 30 % bond; bond released after 90 days unless a complaint', () => {
+  const now = Date.now();
+  const e = [{ user_id: 'u1', project_id: 'p1', source_key: 'install.all', amount: 10000, bucket: 'confirmed', time: now }];
+  const m = fridayMoves(e, { split: 'B', now });
+  expect(m).toEqual([
+    expect.objectContaining({ amount: 7000, from: 'confirmed', to: 'payable' }),
+    expect.objectContaining({ amount: 3000, from: 'confirmed', to: 'bond', release_after: now + 90 * D }),
+  ]);
+  const bond = [{ user_id: 'u1', project_id: 'p1', source_key: 'install.all', amount: 3000, bucket: 'bond', time: now - 91 * D, release_after: now - D }];
+  expect(fridayMoves(bond, { now })).toEqual([expect.objectContaining({ amount: 3000, from: 'bond', to: 'payable' })]);
+  expect(fridayMoves(bond, { now, blocked: new Set(['p1']) })).toEqual([]);
+  expect(fridayMoves([{ ...bond[0], release_after: now + D }], { now })).toEqual([]);
+});
+
+test('payout: Option A pays 10 % of each job per weekend; Saturday pays everything payable', () => {
+  const now = Date.now();
+  let e = [{ user_id: 'u1', project_id: 'p1', source_key: 's', amount: 10000, bucket: 'confirmed', time: now }];
+  const week1 = fridayMoves(e, { split: 'A', now });
+  expect(week1).toEqual([expect.objectContaining({ amount: 1000, to: 'payable' })]);
+  // After 9 weekends 1,000 is left: the 10th pays exactly that.
+  e = [...e, { user_id: 'u1', project_id: 'p1', source_key: 's', amount: -9000, bucket: 'confirmed', time: now }];
+  expect(fridayMoves(e, { split: 'A', now })[0].amount).toBe(1000);
+  const p = [{ user_id: 'u1', project_id: 'p1', source_key: 's', amount: 700, bucket: 'payable' }, { user_id: 'u2', project_id: 'p1', source_key: 's', amount: 300, bucket: 'payable' }];
+  expect(payableByUser(p)).toEqual({ u1: 700, u2: 300 });
+  expect(payoutMoves(p, 'u1')).toEqual([expect.objectContaining({ amount: 700, from: 'payable', to: 'paid' })]);
+});
+
+test('ladder: trainee → technician needs 5 jobs, trust 75, ★4.3 with 5 reviews, no safety flags', () => {
+  const ok = { jobs: 5, trust: 78, rating_sum: 23, rating_count: 5, safety_flags: 0 };
+  expect(lad.ladderChecks('trainee', ok)).toMatchObject({ to: 'technician', ok: true });
+  expect(lad.ladderChecks('trainee', { ...ok, rating_count: 4, rating_sum: 18 }).ok).toBe(false);
+  expect(lad.ladderChecks('trainee', { ...ok, safety_flags: 1 }).ok).toBe(false);
+  expect(lad.ladderChecks('technician', { jobs: 20, trust: 86, rating_sum: 75, rating_count: 16, safety_flags: 0 })).toMatchObject({ to: 'senior', ok: true });
+  expect(lad.ladderChecks('senior', ok).to).toBeNull();
+  expect(lad.ladderChecks('applicant', { verified: true, quiz: 80, safety_test: true }).ok).toBe(true);
+  expect(lad.ladderChecks('applicant', { verified: true, quiz: 60, safety_test: true }).ok).toBe(false);
+  expect(lad.meetsFloor('technician', { trust: 70, rating_sum: 50, rating_count: 10 })).toBe(false);
+  expect(lad.prevLevel('senior')).toBe('technician');
+  expect(lad.prevLevel('trainee')).toBeNull();
+  expect(lad.scoreAnswers(lad.QUIZ, { q_helmet: 'helmet', q_earth: 'meter', q_plumb: 'plumb', q_bracket: 'bolt' })).toBe(80);
+  for (const q of [...lad.QUIZ, ...lad.SAFETY_TEST]) {
+    expect(q.choices).toContain(q.right);
+    expect(q.choices.length).toBeLessThanOrEqual(3);
+    for (const d of [en, mr, hi]) { expect(d[`quiz.${q.key}`]).toBeTruthy(); for (const c of q.choices) expect(d[`quiz.a.${c}`]).toBeTruthy(); }
+  }
 });

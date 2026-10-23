@@ -285,7 +285,9 @@ function noteFor(e) {
   return e.note; // typed reason or bridge number
 }
 
-function timeline(events) {
+// Every event with its proof thumbnails (photos the viewer may see).
+function timeline(events, evidence = []) {
+  const byId = new Map(evidence.map((e) => [e.id, e]));
   return h('section', { class: 'timeline' }, sectionTitle(t('project.timeline'), 'timeline'),
     h('ol', { class: 'tl' }, events.map((e) => {
       const note = noteFor(e);
@@ -294,7 +296,11 @@ function timeline(events) {
         h('div', { class: 'tl-meta' }, L(e.who_name) || '', e.role ? ` · ${t(`role.${e.role}`)}` : '', ` · ${formatDateTime(e.time_device)}`,
           e.time_server ? null : h('span', { class: 'pending-tag' }, ` · ${t('offline.pendingOne')}`),
           e.assisted_by ? ` · ${t('assist.short')}` : ''),
-        note ? h('div', { class: 'tl-note' }, note) : null);
+        note ? h('div', { class: 'tl-note' }, note) : null,
+        (() => {
+          const pics = (e.proof_ids || []).map((id) => byId.get(id)).filter((ev) => ev?.files?.[0]?.type?.startsWith('image')).slice(0, 3);
+          return pics.length ? h('div', { class: 'tr-pics', 'data-testid': 'tl-proofs' }, pics.map((ev) => thumb(ev.files[0].file_id))) : null;
+        })());
     })));
 }
 
@@ -322,7 +328,7 @@ export default async function projectScreen({ params, user, role, refresh }) {
     contactSection(p, { user, role }),
     moneySection(p),
     await teamSection(p),
-    timeline(events));
+    timeline(events, evidence));
   return { node, voice };
 }
 

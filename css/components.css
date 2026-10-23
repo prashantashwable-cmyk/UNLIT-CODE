@@ -500,3 +500,22 @@ button.card { cursor: pointer; font: inherit; }
   body.printing-qr .sheet-head, body.printing-qr .qr-card > .big-btn { display: none; }
   body.printing-qr .qr-a6 { width: 105mm; height: 148mm; }
 }
+
+/* ---------- Phase 8: control ---------- */
+.queue { display: flex; flex-direction: column; gap: var(--gap); }
+.carried-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: var(--c-wait); color: var(--on-wait, #000); font-size: .85em; font-weight: 700; }
+.admin-tools { display: flex; gap: 8px; flex-wrap: wrap; margin: var(--gap) 0; }
+.admin-tools > .big-btn { flex: 1 1 140px; }
+.pay-list { display: flex; flex-direction: column; gap: 6px; }
+.pay-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--card-solid); min-height: 48px; }
+.pay-row input { width: 24px; height: 24px; }
+.rule-list { display: grid; gap: 8px; }
+.rule-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 160px); gap: 8px; align-items: center; }
+.rule-changes { margin: 0; padding-left: 18px; }
+.filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-bottom: var(--gap); }
+.filter { display: flex; flex-direction: column; gap: 2px; font-size: .9em; }
+.step-num { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--c-info); color: var(--on-info, #fff); font-weight: 700; flex: 0 0 auto; }
+.step-num.done { background: var(--c-do); }
+.ladder-checks { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 4px; }
+.ladder-checks li { display: flex; align-items: center; gap: 6px; }
+.quiz .choices { margin-top: 8px; }

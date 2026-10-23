@@ -110,7 +110,10 @@ test('UI: QC visit list, rework fix, 9-photo surprise check, critical sign-off, 
   await as(page, 'u_admin');
   await page.goto('/#/project/p0011');
   await page.getByTestId('insp-date').fill(new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10));
+  const before = (await proj(page, 'p0011')).permits.inspection_date;
   await page.getByTestId('insp-set').click();
+  await expect.poll(async () => (await proj(page, 'p0011')).permits.inspection_date).not.toBe(before);
+  await page.reload();
   await page.getByTestId('insp-fail').click();
   await page.getByTestId('fix-earthing').click();
   await page.getByTestId('insp-fail-save').click();

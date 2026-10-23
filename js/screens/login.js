@@ -58,6 +58,7 @@ export default async function login() {
         onclick: async () => { try { await api.demoLogin(u.id); feedback('success'); } catch (e) { showError(e); } },
       }, icon(ROLE_ICON[role]), h('span', { class: 'person-name' }, L(u.name)), h('small', {}, u.roles.map((r) => t(`role.${r}`)).join(' · ')))))),
       bigButton({ icon: 'phone', label: t('login.withPhone'), colour: 'blue', small: true, testid: 'login-phone', onClick: () => go('phone') }),
+      bigButton({ icon: 'spanner', label: t('join.title'), colour: 'green', small: true, testid: 'go-join', onClick: () => { location.hash = '#/join'; } }),
     );
   }
 
@@ -88,6 +89,7 @@ export default async function login() {
       choices([
         { icon: 'help', label: t('help.title'), colour: 'red', onClick: () => openHelp() },
         { icon: 'back', label: t('login.tryAgain'), colour: 'blue', onClick: () => go('phone') },
+        { icon: 'spanner', label: t('join.title'), colour: 'green', testid: 'unknown-join', onClick: () => { location.hash = '#/join'; } },
       ]),
     );
   }

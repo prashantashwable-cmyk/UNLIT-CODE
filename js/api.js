@@ -6,8 +6,9 @@ import * as db from './db.js';
 import {
   can, assertCan, viewProject, PermissionError, canSeeUserPhone, maskPhone, FIELD_ROLES,
 } from './permissions.js';
-import { checkGate, isStageOwner, nextStage, statusColour, stageDef } from './stages.js';
-import { bucketTotals, moveEntries } from './ledger.js';
+import { checkGate, isStageOwner, nextStage, statusColour, stageDef, stageClock } from './stages.js';
+import { bucketTotals, moveEntries, fridayMoves, payableByUser, payoutMoves } from './ledger.js';
+import { ladderChecks, meetsFloor, nextLevel, prevLevel, QUIZ, SAFETY_TEST, scoreAnswers, QUIZ_PASS, DEMOTE_AFTER_DAYS, SKILLS, EXPERIENCE, AVAILABILITY } from './ladder.js';
 import { weightedRating } from './trust.js';
 import { lastKnownFix, setDemoMode, distanceM, GEOFENCE_M, speedKmh, SUSPICIOUS_KMH } from './geo.js';
 import {
@@ -24,7 +25,7 @@ import {
 } from './qc.js';
 import { t as tr } from './i18n.js';
 import {
-  baseCost, priceAt, levelOf, quoteAllowed, botCounter, paymentSchedule, leadScore, FIRST_LEVEL, FLOOR_LEVEL, BOT_LIMIT,
+  baseCost, priceAt, levelOf, quoteAllowed, botCounter, paymentSchedule, leadScore, FIRST_LEVEL, FLOOR_LEVEL, BOT_LIMIT, DEFAULT_RATE_CARD,
 } from './pricing.js';
 
 export { PermissionError };
@@ -295,7 +296,11 @@ export async function listWorkers() {
 
 export async function getRules() {
   const rec = await db.get('settings', 'rules');
-  return { ...DEFAULT_RULES, ...(rec?.value || {}) };
+  const rules = { ...DEFAULT_RULES, ...(rec?.value || {}) };
+  // A rule change may set only some rate-card rows: the rest come from the default card.
+  const rc = rules.rate_card || {};
+  rules.rate_card = { ...DEFAULT_RATE_CARD, ...rc, byFloors: { ...DEFAULT_RATE_CARD.byFloors, ...(rc.byFloors || {}) } };
+  return rules;
 }
 
 // ---------- projects ----------
@@ -2656,3 +2661,593 @@ async function buildDoc(p, kind) {
 }
 
 const formatINRen = (n) => `Rs ${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
+
+// ---------- Phase 8: control – exceptions queue, day close, payouts, rules, reports, owner, ladder ----------
+
+function requireRole(roles, action) {
+  const ctx = requireLogin();
+  if (!roles.includes(ctx.role) || !ctx.user.roles.includes(ctx.role)) throw new PermissionError(action);
+  return ctx;
+}
+const WORKER_LEVELS = ['trainee', 'technician', 'senior'];
+
+// Only what needs a person today. Items closed yesterday without action are marked "carried".
+export async function exceptions(now = Date.now()) {
+  const { user } = requireRole(['admin'], 'exceptions');
+  const [projects, approvals, users, ledger, close] = await Promise.all([
+    db.getAll('projects'), db.getAll('approvals'), db.getAll('users'), db.getAll('ledger'), db.get('settings', 'dayclose'),
+  ]);
+  const items = [];
+  const add = (id, kind, p, extra = {}) => items.push({ id, kind, project_id: p?.id || null, code: p?.code || null, ...extra });
+  for (const p of projects) {
+    if (p.flags?.cancelled) continue;
+    if (p.flags?.stop_work) add(`incident:${p.id}`, 'incident', p, { colour: 'red', note: p.flags.stop_work.kind });
+    if (p.stage === 11 && p.container?.arrived_time && !p.container.unlocked && deliveryPaid(p) && !validKeys(p.container.lock_events || []).includes('admin')) add(`key:${p.id}`, 'containerKey', p, { colour: 'yellow' });
+    for (const ps of p.install?.pauses || []) if (!ps.approved && !ps.rejected && !ps.end) add(`pause:${p.id}:${ps.id}`, 'pause', p, { colour: 'yellow', note: ps.reason, pause_id: ps.id });
+    for (const i of p.issues || []) {
+      if (i.status !== 'open') continue;
+      if (i.type === 'dispute') add(`dispute:${i.id}`, 'dispute', p, { colour: 'red' });
+      if (i.type === 'material_claim') add(`claim:${i.id}`, 'claim', p, { colour: 'yellow', note: i.line });
+    }
+    if (p.stage === 13 || p.stage === 14) {
+      const { evidence, reviews } = await installData(p);
+      for (const st of substageSteps(p, currentSubstage(p), evidence, reviews)) {
+        if (st.state === 'review' && reviewerRoles(st).includes('admin')) add(`review:${st.evidence.id}`, st.evidence.ai?.result === 'appeal' ? 'appeal' : 'review', p, { colour: 'yellow', note: st.key, evidence_id: st.evidence.id });
+      }
+    }
+  }
+  const decided = new Set(approvals.filter((a) => a.gate_key === 'override.confirm').map((a) => a.request_id));
+  for (const a of approvals.filter((x) => x.gate_key === 'override.request' && !decided.has(x.id))) {
+    add(`override:${a.id}`, 'override', projects.find((p) => p.id === a.project_id), { colour: 'red', note: a.reason, mine: a.by === user.id, request_id: a.id });
+  }
+  const priceDone = new Set(approvals.filter((a) => a.gate_key === 'price.belowFloor.decision').map((a) => a.request_id));
+  for (const a of approvals.filter((x) => x.gate_key === 'price.belowFloor' && !priceDone.has(x.id))) add(`price:${a.id}`, 'price', projects.find((p) => p.id === a.project_id), { colour: 'blue', waiting: 'owner' });
+  for (const r of pendingPromotions(approvals)) add(`promotion:${r.id}`, 'promotion', null, { colour: 'green', user_id: r.user_id, from: r.from, to: r.to, request_id: r.id, name: users.find((u) => u.id === r.user_id)?.name });
+  const payable = Object.values(payableByUser(ledger)).reduce((a, b) => a + b, 0);
+  if (payable > 0) add('payout:due', 'payout', null, { colour: 'green', amount: payable });
+  for (const r of pendingPayouts(approvals)) add(`payout2:${r.id}`, 'payoutApprove', null, { colour: 'yellow', amount: r.total, mine: r.by === user.id, request_id: r.id });
+  for (const u of users.filter((x) => x.retraining && !x.retraining.done)) add(`retrain:${u.id}`, 'retraining', null, { colour: 'yellow', user_id: u.id, name: u.name });
+  const today = dayKey(now);
+  const carried = close && close.value?.day < today ? new Set(close.value.items) : new Set();
+  for (const it of items) it.carried = carried.has(it.id);
+  const rank = { red: 0, yellow: 1, blue: 2, green: 3 };
+  return items.sort((a, b) => b.carried - a.carried || rank[a.colour] - rank[b.colour]);
+}
+
+// Evening day close: what is still open rolls over to tomorrow (shown as "carried").
+export async function closeDay() {
+  const { user } = requireRole(['admin'], 'dayclose');
+  const open = await exceptions();
+  const rec = { key: 'dayclose', value: { day: dayKey(), items: open.map((i) => i.id), by: user.id, time: Date.now() } };
+  await db.put('settings', rec);
+  await audit('day.close', { open: open.length });
+  return open.length;
+}
+
+export async function lastDayClose() {
+  requireRole(['admin', 'owner'], 'dayclose');
+  return (await db.get('settings', 'dayclose'))?.value || null;
+}
+
+// ----- payouts: Friday close (confirmed → payable/bond, bonds released), Saturday release (→ paid) -----
+
+function pendingPayouts(approvals) {
+  const done = new Set(approvals.filter((a) => a.gate_key === 'payout.confirm').map((a) => a.request_id));
+  return approvals.filter((a) => a.gate_key === 'payout.request' && !done.has(a.id));
+}
+
+async function writeMoves(moves, time = Date.now()) {
+  for (const m of moves) {
+    const [out, inn] = moveEntries({ ...m, time, makeId: db.uid });
+    await write('ledger', { ...out, time_device: time, time_server: null });
+    await write('ledger', { ...inn, ...(m.release_after ? { release_after: m.release_after } : {}), time_device: time, time_server: null });
+  }
+}
+
+export async function payoutOverview() {
+  requireRole(['admin'], 'payout.release');
+  const [ledger, users, approvals, rules] = await Promise.all([db.getAll('ledger'), db.getAll('users'), db.getAll('approvals'), getRules()]);
+  const payable = payableByUser(ledger);
+  const nameOf = (id) => users.find((u) => u.id === id)?.name || id;
+  return {
+    split: rules.payout_split || 'B', threshold: rules.payout_second_approver_above || 50000,
+    people: Object.entries(payable).map(([id, amount]) => ({ user_id: id, name: nameOf(id), amount })).sort((a, b) => b.amount - a.amount),
+    totals: bucketTotals(ledger),
+    pending: pendingPayouts(approvals).map((r) => ({ id: r.id, total: r.total, by: r.by, items: r.items })),
+  };
+}
+
+// Friday night. Also confirms rider commissions whose project has passed the token stage.
+export async function fridayClose(now = Date.now()) {
+  const { user } = requireRole(['admin'], 'payout.release');
+  const [ledger, projects, rules] = await Promise.all([db.getAll('ledger'), db.getAll('projects'), getRules()]);
+  const riderMoves = [];
+  const net = new Map();
+  for (const e of ledger) if (e.bucket === 'provisional' && e.source_key.startsWith('rider.')) {
+    const k = `${e.user_id}|${e.project_id}|${e.source_key}`;
+    net.set(k, (net.get(k) || 0) + e.amount);
+  }
+  for (const [k, amount] of net) {
+    const [user_id, project_id, source_key] = k.split('|');
+    const p = projects.find((x) => x.id === project_id);
+    if (amount > 0 && p && p.stage > 5 && !p.flags?.cancelled) riderMoves.push({ user_id, project_id, source_key, amount, from: 'provisional', to: 'confirmed' });
+  }
+  await writeMoves(riderMoves, now);
+  // A defect complaint (open QC fail, open AMC ticket) holds the bond.
+  const blocked = new Set(projects.filter((p) => (p.issues || []).some((i) => i.status === 'open' && ['qc_fail', 'inspector_reject'].includes(i.type)) || (p.amc?.tickets || []).some((tk) => tk.status === 'open')).map((p) => p.id));
+  const moves = fridayMoves(await db.getAll('ledger'), {
+    split: rules.payout_split || 'B', bondPct: rules.bond_pct ?? 30, bondDays: rules.bond_days ?? 90, now, blocked,
+  });
+  await writeMoves(moves, now);
+  await audit('payout.friday', { moves: moves.length + riderMoves.length, by: user.id });
+  emit('data');
+  return { moved: moves.length + riderMoves.length, toPayable: moves.filter((m) => m.to === 'payable').reduce((s, m) => s + m.amount, 0) };
+}
+
+async function executePayout(userIds, now = Date.now()) {
+  const ledger = await db.getAll('ledger');
+  let total = 0;
+  for (const id of userIds) {
+    const moves = payoutMoves(ledger, id);
+    total += moves.reduce((s, m) => s + m.amount, 0);
+    await writeMoves(moves, now);
+    if (moves.length) {
+      const amount = moves.reduce((s, m) => s + m.amount, 0);
+      await write('messages', {
+        id: db.uid('msg'), project_id: `support:${id}`, thread: 'main', by: 'system', by_name: { en: 'AIEC', mr: 'AIEC', hi: 'AIEC' }, role: 'admin',
+        type: 'text', content: { key: 'payout.msg.paid', params: { amount } }, time_device: now, time_server: null,
+      });
+    }
+  }
+  emit('data');
+  return total;
+}
+
+// Saturday release. Above the threshold a second admin (not the one who asked) must confirm.
+export async function releasePayout(userIds) {
+  const { user, role } = requireRole(['admin'], 'payout.release');
+  assertCan(user, role, 'payout.release');
+  const [ledger, rules] = await Promise.all([db.getAll('ledger'), getRules()]);
+  const payable = payableByUser(ledger);
+  const items = userIds.filter((id) => payable[id] > 0).map((id) => ({ user_id: id, amount: payable[id] }));
+  if (!items.length) throw new ApiError('payout.nothing');
+  const total = items.reduce((s, i) => s + i.amount, 0);
+  if (total > (rules.payout_second_approver_above || 50000)) {
+    const id = db.uid('ap');
+    await write('approvals', { id, project_id: 'payout', gate_key: 'payout.request', items, total, by: user.id, role, method: 'pin', time_device: Date.now(), time_server: null });
+    await audit('payout.request', { total });
+    return { status: 'needs_second', request_id: id, total };
+  }
+  const paid = await executePayout(items.map((i) => i.user_id));
+  await write('approvals', { id: db.uid('ap'), project_id: 'payout', gate_key: 'payout.done', items, total: paid, by: user.id, role, method: 'pin', time_device: Date.now(), time_server: null });
+  await audit('payout.release', { total: paid });
+  return { status: 'paid', total: paid };
+}
+
+export async function confirmPayout(requestId) {
+  const { user, role } = requireRole(['admin'], 'payout.release');
+  const req = (await db.getByIndex('approvals', 'project_id', 'payout')).find((a) => a.id === requestId && a.gate_key === 'payout.request');
+  if (!req || !pendingPayouts(await db.getAll('approvals')).some((a) => a.id === requestId)) throw new ApiError('error.notFound');
+  if (req.by === user.id) throw new PermissionError('payout.confirm', 'self-approval');
+  const paid = await executePayout(req.items.map((i) => i.user_id));
+  await write('approvals', { id: db.uid('ap'), project_id: 'payout', gate_key: 'payout.confirm', request_id: req.id, total: paid, by: user.id, role, method: 'pin', time_device: Date.now(), time_server: null });
+  await audit('payout.release', { total: paid, second: true });
+  return { status: 'paid', total: paid };
+}
+
+// ----- rules: Admin proposes, Owner approves -----
+
+export const RULE_FIELDS = [
+  { key: 'token_amount', type: 'money' }, { key: 'rider_verified_amount', type: 'money' }, { key: 'rider_main_commission', type: 'money' },
+  { key: 'duplicate_pct', type: 'pct' }, { key: 'technician_per_lift', type: 'money' }, { key: 'bond_pct', type: 'pct' }, { key: 'bond_days', type: 'days' },
+  { key: 'payout_second_approver_above', type: 'money' }, { key: 'unpaid_return_hours', type: 'hours' }, { key: 'gst_pct', type: 'pct' },
+  { key: 'payout_split', type: 'choice', options: ['A', 'B'] }, { key: 'refund_rule', type: 'choice', options: ['qc_reject_only', 'always'] },
+  ...Array.from({ length: 12 }, (_, i) => ({ key: `rate_card.byFloors.${i + 1}`, type: 'money' })),
+];
+
+function getPath(obj, path) { return path.split('.').reduce((o, k) => (o == null ? o : o[k]), obj); }
+function setPath(obj, path, v) {
+  const parts = path.split('.');
+  let o = obj;
+  for (const k of parts.slice(0, -1)) { o[k] = o[k] && typeof o[k] === 'object' ? { ...o[k] } : {}; o = o[k]; }
+  o[parts.at(-1)] = v;
+}
+
+export async function rulesView() {
+  requireRole(['admin', 'owner'], 'rules.view');
+  const rules = await getRules();
+  return { fields: RULE_FIELDS.map((f) => ({ ...f, value: getPath(rules, f.key) })), levels: { first: FIRST_LEVEL, bot: BOT_LIMIT, floor: FLOOR_LEVEL } };
+}
+
+export async function proposeRules(changes, reason) {
+  const { user, role } = requireLogin();
+  assertCan(user, role, 'rules.propose');
+  const clean = {};
+  for (const [k, v] of Object.entries(changes || {})) {
+    const f = RULE_FIELDS.find((x) => x.key === k);
+    if (!f) continue;
+    if (f.type === 'choice') { if (f.options.includes(v)) clean[k] = v; continue; }
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0 || (f.type === 'pct' && n > 100)) throw new ApiError('rules.badValue');
+    clean[k] = Math.round(n);
+  }
+  if (!Object.keys(clean).length) throw new ApiError('rules.noChange');
+  if (!reason || !String(reason).trim()) throw new ApiError('override.reasonNeeded');
+  const id = db.uid('ap');
+  await write('approvals', { id, project_id: 'rules', gate_key: 'rules.proposal', changes: clean, reason, by: user.id, role, method: 'pin', time_device: Date.now(), time_server: null });
+  await audit('rules.propose', { changes: clean });
+  return id;
+}
+
+export async function listRuleProposals() {
+  requireRole(['admin', 'owner'], 'rules.view');
+  const all = await db.getByIndex('approvals', 'project_id', 'rules');
+  const done = new Map(all.filter((a) => a.gate_key === 'rules.decision').map((a) => [a.request_id, a]));
+  return all.filter((a) => a.gate_key === 'rules.proposal').map((a) => ({ ...a, decision: done.get(a.id)?.result || null })).sort((a, b) => b.time_device - a.time_device);
+}
+
+export async function decideRules(proposalId, approve) {
+  const { user, role } = requireLogin();
+  assertCan(user, role, 'rules.approve');
+  const all = await db.getByIndex('approvals', 'project_id', 'rules');
+  const prop = all.find((a) => a.id === proposalId && a.gate_key === 'rules.proposal');
+  if (!prop || all.some((a) => a.gate_key === 'rules.decision' && a.request_id === proposalId)) throw new ApiError('error.notFound');
+  await write('approvals', { id: db.uid('ap'), project_id: 'rules', gate_key: 'rules.decision', request_id: proposalId, result: approve ? 'approved' : 'rejected', by: user.id, role, method: 'pin', time_device: Date.now(), time_server: null });
+  if (approve) {
+    const rules = await getRules();
+    const next = JSON.parse(JSON.stringify(rules));
+    for (const [k, v] of Object.entries(prop.changes)) setPath(next, k, v);
+    await db.put('settings', { key: 'rules', value: next });
+    await queue('settings', 'rules', 'rules.update');
+  }
+  await audit(approve ? 'rules.approved' : 'rules.rejected', { proposal: proposalId });
+}
+
+// ----- reports -----
+
+export async function reportsData(now = Date.now()) {
+  requireRole(['admin', 'owner'], 'reports');
+  const [projects, users, events, routes, ledger] = await Promise.all([db.getAll('projects'), db.getAll('users'), db.getAll('events'), db.getAll('routes'), db.getAll('ledger')]);
+  const live = projects.filter((p) => !p.flags?.cancelled);
+  const funnel = Array.from({ length: 16 }, (_, i) => ({ stage: i + 1, count: live.filter((p) => p.stage >= i + 1).length }));
+  // Leads per rider per km (last 7 days of routes).
+  const riders = users.filter((u) => u.roles.includes('rider'));
+  const week = now - 7 * 24 * 3600 * 1000;
+  const leadsPerKm = riders.map((r) => {
+    const km = routes.filter((x) => x.user_id === r.id && x.date >= week).reduce((s, x) => s + routeKm(x.points || []), 0);
+    const leads = projects.filter((p) => p.lead?.rider_id === r.id).length;
+    return { user_id: r.id, name: r.name, leads, km: Math.round(km * 10) / 10, perKm: km ? Math.round((leads / km) * 100) / 100 : 0 };
+  });
+  // Quote win rate by first-quote level.
+  const byLevel = {};
+  for (const p of projects) {
+    const first = p.quote_history?.[0];
+    if (!first) continue;
+    const lvl = (first.level || 1.6).toFixed(2);
+    byLevel[lvl] = byLevel[lvl] || { level: lvl, quotes: 0, won: 0 };
+    byLevel[lvl].quotes += 1;
+    if (p.price?.accepted) byLevel[lvl].won += 1;
+  }
+  // Days per stage from the stage-advance events.
+  const spans = {};
+  for (const p of projects) {
+    const adv = events.filter((e) => e.project_id === p.id && (e.action === 'stage.advance' || e.action === 'override.confirm')).sort((a, b) => a.time_device - b.time_device);
+    let enter = p.created || adv[0]?.time_device;
+    for (const e of adv) {
+      const from = Number(String(e.note).split('→')[0]);
+      if (from && enter) (spans[from] ||= []).push((e.time_device - enter) / 86400000);
+      enter = e.time_device;
+    }
+  }
+  const daysPerStage = Array.from({ length: 15 }, (_, i) => {
+    const v = spans[i + 1] || [];
+    return { stage: i + 1, days: v.length ? Math.round((v.reduce((a, b) => a + b, 0) / v.length) * 10) / 10 : 0 };
+  });
+  const checked = projects.filter((p) => (p.qc_visit?.runs || []).length);
+  const qcFirstPass = { checked: checked.length, firstPass: checked.filter((p) => p.qc_visit.runs[0].result === 'pass').length };
+  let cashIn = 0; let owed = 0;
+  for (const p of live) for (const pm of p.payments || []) { if (pm.status === 'paid') cashIn += pm.amount; else owed += pm.amount || 0; }
+  const workers = users.filter((u) => u.roles.some((r) => WORKER_LEVELS.includes(r)) && !u.system);
+  const supply = {};
+  for (const u of workers) {
+    const a = u.area?.en || '-';
+    supply[a] = supply[a] || { area: u.area, trainee: 0, technician: 0, senior: 0 };
+    const lvl = WORKER_LEVELS.find((r) => u.roles.includes(r));
+    supply[a][lvl] += 1;
+  }
+  const trustBands = [['<60', 0, 60], ['60–74', 60, 75], ['75–84', 75, 85], ['85+', 85, 101]].map(([label, lo, hi]) => ({
+    label, count: users.filter((u) => !u.system && u.trust != null && u.roles.some((r) => [...WORKER_LEVELS, 'rider', 'qc'].includes(r)) && u.trust >= lo && u.trust < hi).length,
+  }));
+  return {
+    funnel, leadsPerKm, winRate: Object.values(byLevel).sort((a, b) => b.level - a.level), daysPerStage, qcFirstPass,
+    cash: { in: cashIn, owed }, supply: Object.values(supply), trustBands, earnings: bucketTotals(ledger),
+  };
+}
+
+// ----- owner page -----
+
+export async function ownerSummary(now = Date.now()) {
+  requireRole(['owner', 'admin'], 'owner.view');
+  const [projects, users, events, approvals] = await Promise.all([db.getAll('projects'), db.getAll('users'), db.getAll('events'), db.getAll('approvals')]);
+  const live = projects.filter((p) => !p.flags?.cancelled);
+  let cashIn = 0; let owed = 0; let weekCash = 0;
+  const week = now - 7 * 24 * 3600 * 1000;
+  for (const p of live) for (const pm of p.payments || []) {
+    if (pm.status === 'paid') { cashIn += pm.amount; if ((pm.time || 0) >= week) weekCash += pm.amount; } else owed += pm.amount || 0;
+  }
+  const sold = live.filter((p) => p.price?.accepted && p.costing?.base);
+  const margin = sold.length ? Math.round((sold.reduce((s, p) => s + (p.price.amount - p.costing.base) / p.price.amount, 0) / sold.length) * 1000) / 10 : 0;
+  const pipeline = live.filter((p) => p.stage <= 4 && p.price && !p.price.accepted).reduce((s, p) => s + p.price.amount, 0);
+  const workers = users.filter((u) => u.roles.some((r) => WORKER_LEVELS.includes(r)) && !u.system);
+  const byLevel = Object.fromEntries(WORKER_LEVELS.map((l) => [l, workers.filter((u) => u.roles.includes(l)).length]));
+  const avgTrust = workers.length ? Math.round(workers.reduce((s, u) => s + (u.trust || 0), 0) / workers.length) : 0;
+  const avgRating = workers.length ? Math.round((workers.reduce((s, u) => s + weightedRating(u.rating_sum || 0, u.rating_count || 0), 0) / workers.length) * 100) / 100 : 0;
+  // Top 5 risks: incidents, disputes, red delays, unpaid at site, open QC fails.
+  const risks = [];
+  for (const p of live) {
+    const colour = statusColour(p, now);
+    if (p.flags?.stop_work) risks.push({ project_id: p.id, code: p.code, kind: 'incident', weight: 100 });
+    if ((p.issues || []).some((i) => i.type === 'dispute' && i.status === 'open')) risks.push({ project_id: p.id, code: p.code, kind: 'dispute', weight: 80 });
+    if (p.stage === 11 && p.container?.arrived_time && !deliveryPaid(p)) risks.push({ project_id: p.id, code: p.code, kind: 'unpaid', weight: 70 });
+    if ((p.issues || []).some((i) => i.type === 'qc_fail' && i.status === 'open')) risks.push({ project_id: p.id, code: p.code, kind: 'qcFail', weight: 60 });
+    if (colour === 'red' && !p.flags?.stop_work) risks.push({ project_id: p.id, code: p.code, kind: 'late', weight: 50, stage: p.stage });
+  }
+  const rulesPending = (await db.getByIndex('approvals', 'project_id', 'rules')).filter((a) => a.gate_key === 'rules.proposal' && !approvals.some((d) => d.gate_key === 'rules.decision' && d.request_id === a.id)).length;
+  const priceDone = new Set(approvals.filter((a) => a.gate_key === 'price.belowFloor.decision').map((a) => a.request_id));
+  const prices = approvals.filter((a) => a.gate_key === 'price.belowFloor' && !priceDone.has(a.id)).length;
+  const ovDone = new Set(approvals.filter((a) => a.gate_key === 'override.confirm').map((a) => a.request_id));
+  const overrides = approvals.filter((a) => a.gate_key === 'override.request' && !ovDone.has(a.id)).length;
+  const inWeek = (e) => e.time_device >= week;
+  return {
+    cash: { in: cashIn, owed }, pipeline, margin,
+    lifts: { installed: live.filter((p) => p.stage >= 15).length, inProgress: live.filter((p) => p.stage === 13 || p.stage === 14).length, total: live.length },
+    workers: { byLevel, avgTrust, avgRating, count: workers.length },
+    risks: risks.sort((a, b) => b.weight - a.weight).slice(0, 5),
+    decisions: { rules: rulesPending, prices, overrides },
+    week: {
+      leads: events.filter((e) => e.action === 'lead.capture' && inWeek(e)).length,
+      won: events.filter((e) => e.action === 'sales.accept' && inWeek(e)).length,
+      handovers: events.filter((e) => e.action === 'noc.issued' && inWeek(e)).length,
+      cash: weekCash,
+    },
+  };
+}
+
+// ----- live map (Admin): sites, riders, technicians, QC, containers -----
+
+export async function liveMap(now = Date.now()) {
+  const { user, role } = requireRole(['admin'], 'map.all');
+  assertCan(user, role, 'map.all');
+  const [projects, users, routes] = await Promise.all([db.getAll('projects'), db.getAll('users'), db.getAll('routes')]);
+  const items = [];
+  for (const p of projects) {
+    if (p.flags?.cancelled || p.site?.lat == null) continue;
+    const pay = (p.payments || []).some((x) => x.status !== 'paid' && x.milestone !== 'token' && ((x.milestone === 'delivery' && p.stage >= 11) || (x.milestone === 'cabin' && p.stage >= 12) || (x.milestone === 'handover' && p.stage >= 15))) ? 'due' : 'ok';
+    const clock = stageClock(p, now);
+    items.push({ kind: 'site', id: p.id, project_id: p.id, code: p.code, lat: p.site.lat, lng: p.site.lng, stage: p.stage, area: p.site.area, colour: statusColour(p, now), pay, late: !!clock && now > clock.deadline });
+    if (p.stage === 11 && p.container?.dispatched_time) {
+      const pos = containerPosition(p.container, p.site, now);
+      if (pos) items.push({ kind: 'container', id: `c_${p.id}`, project_id: p.id, code: p.code, lat: pos.lat, lng: pos.lng, stage: p.stage, area: p.site.area, colour: p.container.arrived_time ? 'yellow' : 'blue' });
+    }
+  }
+  for (const u of users.filter((x) => !x.system)) {
+    const kind = u.roles.includes('rider') && !u.roles.some((r) => WORKER_LEVELS.includes(r)) ? 'rider' : u.roles.some((r) => WORKER_LEVELS.includes(r)) ? 'tech' : u.roles.includes('qc') ? 'qc' : null;
+    if (!kind) continue;
+    let pos = u.home;
+    let project = null;
+    if (kind === 'rider') {
+      const last = routes.filter((r) => r.user_id === u.id).sort((a, b) => b.date - a.date)[0];
+      if (last?.points?.length) pos = last.points.at(-1);
+    } else {
+      project = projects.find((p) => p.stage >= 11 && p.stage <= 14 && (p.team?.lead_tech === u.id || (p.team?.techs || []).includes(u.id) || p.team?.qc_id === u.id));
+      if (project && kind === 'tech') pos = { lat: project.site.lat + 0.0004, lng: project.site.lng + 0.0004 };
+    }
+    if (!pos) continue;
+    items.push({ kind, id: u.id, project_id: project?.id || null, name: u.name, level: u.level, lat: pos.lat, lng: pos.lng, area: u.area, colour: 'blue', stage: project?.stage || null });
+  }
+  return items;
+}
+
+// ----- ladder: checks, auto-promotion (Admin one tap), demotion, review card -----
+
+function pendingPromotions(approvals) {
+  const done = new Set(approvals.filter((a) => a.gate_key === 'promotion.decision').map((a) => a.request_id));
+  return approvals.filter((a) => a.gate_key === 'promotion.request' && !done.has(a.id));
+}
+
+async function statsFor(u, projects) {
+  const jobs = projects.filter((p) => p.stage >= 15 && (p.team?.lead_tech === u.id || (p.team?.techs || []).includes(u.id))).length + (u.jobs_seed || 0);
+  const ob = u.onboarding || {};
+  return {
+    jobs, trust: u.trust ?? 0, rating_sum: u.rating_sum || 0, rating_count: u.rating_count || 0, safety_flags: u.safety_flags || 0,
+    quiz: ob.quiz ?? 0, safety_test: !!ob.safety_test, verified: !!(ob.aadhaar_last4 && ob.bank_last4 && ob.eshram_last4 && u.face_ref),
+  };
+}
+const levelOfUser = (u) => (u.roles.includes('applicant') ? 'applicant' : WORKER_LEVELS.slice().reverse().find((l) => u.roles.includes(l)) || null);
+
+export async function myLadder() {
+  const { user } = requireLogin();
+  const u = await db.get('users', user.id);
+  const level = levelOfUser(u);
+  if (!level) return null;
+  const stats = await statsFor(u, await db.getAll('projects'));
+  const pending = pendingPromotions(await db.getAll('approvals')).find((r) => r.user_id === u.id) || null;
+  return { level, stats, ...ladderChecks(level, stats), pending: pending ? pending.to : null, retraining: !!u.retraining && !u.retraining.done, trust: u.trust, rating: weightedRating(u.rating_sum || 0, u.rating_count || 0), rating_count: u.rating_count || 0 };
+}
+
+// System pass (runs when Admin opens Today): promotion requests for people who qualify; demotion
+// after 30 days below the level's floor. Returns the number of new requests.
+export async function ladderScan(now = Date.now()) {
+  requireRole(['admin'], 'ladder');
+  const [users, projects, approvals] = await Promise.all([db.getAll('users'), db.getAll('projects'), db.getAll('approvals')]);
+  const pending = pendingPromotions(approvals);
+  let made = 0;
+  for (const u of users) {
+    if (u.system || u.status !== 'active') continue;
+    const level = levelOfUser(u);
+    if (!level) continue;
+    const stats = await statsFor(u, projects);
+    const chk = ladderChecks(level, stats);
+    if (chk.ok && !u.retraining && !pending.some((r) => r.user_id === u.id)) {
+      await write('approvals', { id: db.uid('ap'), project_id: 'people', gate_key: 'promotion.request', user_id: u.id, from: level, to: chk.to, by: 'system', role: 'system', method: 'auto', time_device: now, time_server: null });
+      made += 1;
+    }
+    if (WORKER_LEVELS.includes(level) && level !== 'trainee') {
+      if (meetsFloor(level, stats)) { if (u.below_since) { delete u.below_since; await db.put('users', u); } } else if (!u.below_since) {
+        u.below_since = now; await db.put('users', u);
+      } else if (now - u.below_since > DEMOTE_AFTER_DAYS * 24 * 3600 * 1000) {
+        const down = prevLevel(level);
+        u.roles = u.roles.map((r) => (r === level ? down : r));
+        u.level = down;
+        delete u.below_since;
+        await db.put('users', u);
+        await supportMsg(u.id, { key: 'ladder.msg.demoted', params: { level: down } });
+        await audit('ladder.demote', { user_id: u.id, to: down });
+      }
+    }
+  }
+  return made;
+}
+
+async function supportMsg(userId, content) {
+  await write('messages', {
+    id: db.uid('msg'), project_id: `support:${userId}`, thread: 'main', by: 'system', by_name: { en: 'AIEC', mr: 'AIEC', hi: 'AIEC' }, role: 'admin',
+    type: 'text', content, time_device: Date.now(), time_server: null,
+  });
+  emit('chat');
+}
+
+export async function decidePromotion(requestId, approve) {
+  const { user, role } = requireRole(['admin'], 'promotion');
+  const approvals = await db.getAll('approvals');
+  const req = pendingPromotions(approvals).find((a) => a.id === requestId);
+  if (!req) throw new ApiError('error.notFound');
+  await write('approvals', { id: db.uid('ap'), project_id: 'people', gate_key: 'promotion.decision', request_id: req.id, result: approve ? 'approved' : 'rejected', by: user.id, role, method: 'pin', time_device: Date.now(), time_server: null });
+  if (!approve) return;
+  const u = await db.get('users', req.user_id);
+  u.roles = u.roles.map((r) => (r === req.from ? req.to : r));
+  if (!u.roles.includes(req.to)) u.roles.push(req.to);
+  u.level = req.to;
+  await db.put('users', u);
+  await supportMsg(u.id, { key: 'ladder.msg.promoted', params: { level: req.to } });
+  await audit('ladder.promote', { user_id: u.id, to: req.to });
+}
+
+export async function finishRetraining(userId) {
+  requireRole(['admin'], 'retraining');
+  const u = await db.get('users', userId);
+  if (!u?.retraining) throw new ApiError('error.notFound');
+  u.retraining = { ...u.retraining, done: Date.now() };
+  await db.put('users', u);
+  await supportMsg(u.id, { key: 'ladder.msg.retrained', params: {} });
+}
+
+// ----- Join: public page, apply, verify, learn, safety test -----
+
+export async function joinInfo() {
+  const [rules, projects, users] = await Promise.all([getRules(), db.getAll('projects'), db.getAll('users')]);
+  const perLift = rules.technician_per_lift || 45000;
+  const areas = {};
+  for (const p of projects) {
+    if (p.stage < 9 || p.stage > 14) continue;
+    const k = p.site?.area?.en || '-';
+    areas[k] = areas[k] || { area: p.site.area, jobs: 0, workers: 0 };
+    areas[k].jobs += 1;
+  }
+  for (const u of users) if (u.roles.some((r) => WORKER_LEVELS.includes(r))) { const k = u.area?.en; if (areas[k]) areas[k].workers += 1; }
+  return {
+    earnings: { trainee: Math.round(perLift / 2), technician: perLift, senior: Math.round(perLift * 1.2) },
+    wanted: Object.values(areas).sort((a, b) => b.jobs - a.jobs), skills: SKILLS, experience: EXPERIENCE, availability: AVAILABILITY,
+  };
+}
+
+// New applicants have no account yet: the OTP may go to any number.
+export async function requestJoinOtp(phone) {
+  if (normPhone(phone).length !== 10) throw new ApiError('login.badPhone');
+  return { sent: true };
+}
+
+export async function applyAsWorker({ phone, name, skill, area, experience, availability }) {
+  if (otpVerified !== normPhone(phone)) throw new PermissionError('join.apply', 'otp-first');
+  if (!SKILLS.includes(skill) || !EXPERIENCE.includes(experience) || !AVAILABILITY.includes(availability) || !AREAS[area]) throw new ApiError('join.pickAll');
+  if (await findByPhone(phone)) throw new ApiError('join.exists');
+  const id = db.uid('u');
+  const a = AREAS[area];
+  const nm = String(name || '').trim() || '-';
+  const u = {
+    id, name: { en: nm, mr: nm, hi: nm }, roles: ['applicant'], area: a.name, home: { lat: a.lat, lng: a.lng }, phone: normPhone(phone), level: 'applicant',
+    lang: 'mr', pin_hash: null, face_ref: null, kyc_status: 'pending', trust: 60, rating_sum: 0, rating_count: 0, status: 'active',
+    onboarding: { skill, experience, availability, applied: Date.now() },
+  };
+  await db.put('users', u);
+  await audit('join.apply', { user_id: id });
+  await startSession(u, 'applicant');
+  return id;
+}
+
+function requireApplicant() {
+  const ctx = requireLogin();
+  if (ctx.role !== 'applicant') throw new PermissionError('join.only');
+  return ctx;
+}
+
+// Aadhaar/ID, bank account and e-Shram numbers (number pad). Only the last 4 digits are kept here;
+// the full numbers go to the KYC provider in a real build.
+export async function submitVerification({ aadhaar, bank, eshram }) {
+  const { user } = requireApplicant();
+  const d = (s) => String(s || '').replace(/\D/g, '');
+  if (d(aadhaar).length !== 12) throw new ApiError('join.aadhaar');
+  if (d(bank).length < 9 || d(bank).length > 18) throw new ApiError('join.bank');
+  if (d(eshram).length !== 12) throw new ApiError('join.eshram');
+  const u = await db.get('users', user.id);
+  u.onboarding = { ...(u.onboarding || {}), aadhaar_last4: d(aadhaar).slice(-4), bank_last4: d(bank).slice(-4), eshram_last4: d(eshram).slice(-4) };
+  u.bank_masked = `XXXX XXXX ${d(bank).slice(-4)}`;
+  u.eshram_id = `UW-XXXXXXXX${d(eshram).slice(-4)}`;
+  u.kyc_status = 'submitted';
+  await db.put('users', u);
+  await audit('join.verify', { user_id: u.id });
+}
+
+export async function enrolMyFace(selfie) {
+  const { user } = requireApplicant();
+  if (!selfie?.blob || !selfie.liveness) throw new ApiError('login.faceFail');
+  const u = await db.get('users', user.id);
+  u.face_ref = await saveFile(selfie.blob, { kind: 'selfie', owner_id: u.id, sha256: selfie.sha256 });
+  await db.put('users', u);
+  me = u;
+}
+
+export async function markLearned(cardKey) {
+  const { user } = requireApplicant();
+  const u = await db.get('users', user.id);
+  const learned = new Set(u.onboarding?.learned || []);
+  learned.add(cardKey);
+  u.onboarding = { ...(u.onboarding || {}), learned: [...learned] };
+  await db.put('users', u);
+}
+
+export async function submitQuiz(kind, answers) {
+  const { user } = requireApplicant();
+  const u = await db.get('users', user.id);
+  const score = scoreAnswers(kind === 'safety' ? SAFETY_TEST : QUIZ, answers || {});
+  const ob = { ...(u.onboarding || {}) };
+  if (kind === 'safety') ob.safety_test = score === 100; else ob.quiz = Math.max(ob.quiz || 0, score);
+  u.onboarding = ob;
+  await db.put('users', u);
+  me = u;
+  // Everything done → Admin gets a one-tap promotion to Trainee.
+  const stats = await statsFor(u, []);
+  const approvals = await db.getAll('approvals');
+  if (ladderChecks('applicant', stats).ok && !pendingPromotions(approvals).some((r) => r.user_id === u.id)) {
+    await write('approvals', { id: db.uid('ap'), project_id: 'people', gate_key: 'promotion.request', user_id: u.id, from: 'applicant', to: 'trainee', by: 'system', role: 'system', method: 'auto', time_device: Date.now(), time_server: null });
+  }
+  return { score, pass: kind === 'safety' ? score === 100 : score >= QUIZ_PASS };
+}
+
+export async function myOnboarding() {
+  const { user } = requireApplicant();
+  const u = await db.get('users', user.id);
+  const stats = await statsFor(u, []);
+  const pending = pendingPromotions(await db.getAll('approvals')).some((r) => r.user_id === u.id);
+  return { ...(u.onboarding || {}), face: !!u.face_ref, verified: stats.verified, pending };
+}

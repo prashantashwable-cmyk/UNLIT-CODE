@@ -11,6 +11,7 @@ import { speak } from '../voice.js';
 import { openCamera } from '../camera.js';
 import { askNotificationPermission } from '../notify.js';
 import { sectionTitle } from './common.js';
+import { ladderCard } from './ladder.js';
 
 function toggle(key, labelKey, iconName) {
   const input = h('input', { type: 'checkbox', role: 'switch', checked: getPref(key) ? true : null, 'data-testid': `pref-${key}` });
@@ -57,6 +58,10 @@ export default async function settings({ role, refresh }) {
     me.trust != null ? h('div', { class: 'kv' }, h('span', {}, t('me.trust')), h('strong', { 'data-testid': 'trust' }, `${me.trust} / 100`)) : null,
     me.rating_count ? h('div', { class: 'kv' }, h('span', {}, t('me.rating')), h('strong', {}, `★ ${me.rating.toFixed(2)} (${me.rating_count})`)) : null,
   ]));
+  if (['trainee', 'technician', 'senior'].includes(role)) {
+    const lc = await ladderCard().catch(() => null);
+    if (lc) node.append(lc);
+  }
 
   // Language
   node.append(sectionTitle(t('settings.language'), 'globe'));

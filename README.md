@@ -4,7 +4,7 @@ Installable, offline-first web app for AIEC (Pune): one Project record per lift,
 first lead photo to the last AMC visit. Built for people who cannot read well: every field
 screen **speaks first**, uses **pictures + colours**, big buttons and **zero typing**.
 
-> Status: Phases **1 – Foundation**, **2 – Rider**, **3 – Sales**, **4 – Agreement → QC clearance**, **5 – Supply & delivery**, **6 – Installation** and **7 – QC → licence → AMC** done (see "What's done"). Phases 8–9 follow, one at a time.
+> Status: Phases **1 – Foundation**, **2 – Rider**, **3 – Sales**, **4 – Agreement → QC clearance**, **5 – Supply & delivery**, **6 – Installation**, **7 – QC → licence → AMC** and **8 – Control** done (see "What's done"). Phase 9 (polish) follows.
 
 ## Run it
 
@@ -212,6 +212,39 @@ with resident tickets (0012). Ledger entries exist in every bucket and riders ha
   see the price.
 - Team booking at delivery now adds a trainee to the lead technician (the peer relay needs two people).
 
+## What's done (Phase 8 – Control)
+
+- **Admin Today = exceptions-first queue**: only what needs a person today – STOP WORK incidents,
+  container 3rd key, pauses, proofs to check and AI appeals, overrides (second admin/Owner confirms),
+  below-floor prices (waiting for the Owner), promotions, payouts ready / waiting for a second admin,
+  disputes, material claims, retraining. Actions right in the card. **Close the day**: what is still
+  open rolls to tomorrow and shows "from yesterday".
+- **Live map** (Admin): sites, riders, technicians, QC Inspectors and containers, with filters for
+  role, stage, area, status colour, level, payment status and delay; tap → the project timeline. The
+  **timeline** now shows proof thumbnails next to each event.
+- **Payout batch**: Friday close moves confirmed earnings to payable (Option B: 70 % + 30 % bond for 90
+  days; Option A: 10 % of each job per weekend) and releases bonds without a defect complaint; rider
+  commissions are confirmed once their project is past the token stage. Saturday release pays the
+  selected people (simulated bank payout, voice message to each); **above ₹50,000 a second admin
+  confirms** (never the one who asked).
+- **Reports** (Admin, Owner): funnel, leads per rider per km, quote win rate by first-quote level,
+  days per stage, QC first-pass rate, cash in vs owed, worker supply by area, trust distribution,
+  earnings buckets – hand-written SVG charts.
+- **Rules**: Admin proposes changes (rate card G+1…G+12, commissions, token, team pay per lift,
+  bond %, bond days, second-approver limit, unpaid-return hours, GST, payout split, refund rule) with a
+  reason; nothing changes until the **Owner approves**.
+- **Owner Today = one page**: revenue & cash, pipeline, average margin, lifts installed / in progress,
+  workers by level with average trust and rating, top 5 risks, decisions waiting, weekly summary card.
+- **Join** (no login): earnings calculator, workers wanted by area, skill/area/experience/time →
+  name + phone + OTP → Applicant. Onboarding on Today: Aadhaar/ID, bank and e-Shram by number pad (only
+  last 4 digits kept), face with liveness, 3 SOP cards + picture quiz (≥ 80 %), safety test (all right)
+  → Admin confirms **Trainee** with one tap.
+- **Ladder automation**: when Admin opens Today the system checks everyone – promotion requests
+  (trainee → technician: 5 jobs, trust ≥ 75, ★ ≥ 4.3 with ≥ 5 reviews, no safety flags; technician →
+  senior: 20 jobs, trust ≥ 85, ★ ≥ 4.5 with ≥ 15 reviews) for one-tap confirm, and demotion after 30
+  days below the level's floor. Every change is told to the worker. Workers see a spoken **"My level"**
+  review card (Today and Me) with what is still needed.
+
 ## Folder
 
 ```
@@ -239,6 +272,10 @@ node tools/check-imports.mjs
 npx playwright test
 ```
 
+- `control.spec.js` – **acceptance**: Admin runs a full demo day only from the app (queue, pause,
+  promotion, override with a second admin, Friday close + payout above ₹50,000 with a second admin,
+  rule change approved by the Owner, live map filters, reports, day close → carried items); Join →
+  onboarding → Trainee; api guards (no self-confirm, Owner-only rules, Admin-only queue).
 - `e2e.spec.js` – **acceptance**: one new project from the rider's photos to an AMC ticket, every stage
   passed by its owner through the permission-checked api, ending on screen at stage 16.
 - `closeout.spec.js` – surprise date hidden until its day, rework before re-check, 2 fails → retraining,

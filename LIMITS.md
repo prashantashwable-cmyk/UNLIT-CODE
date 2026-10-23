@@ -56,3 +56,10 @@
 29. **Resident tickets without login.** In this demo there is no server, so a resident's ticket is stored in the database of the phone that opens the QR link. With a real backend the form posts to the server (rate-limited, with a captcha against spam).
 30. **Final 10 % refused.** The dispute thread is a separate chat thread on the project; NOC and handover PDFs stay withheld until the 10 % is paid (paying closes the dispute). Refunds/discounts on disputes are an Admin decision outside the app.
 31. **Handover signatures** use the in-app face check (selfie frame and GPS kept with the signature) rather than Aadhaar eSign, which is only used for the agreement.
+32. **Price levels are fixed.** The rate card, commissions and thresholds are editable rules (Admin proposes, Owner approves). The price ladder (1.60 / 1.50–1.30 / 1.20) stays in code in this build because the sales bot, negotiator limits and their tests depend on it; the Rules screen shows it read-only.
+33. **When the "system" runs.** There is no server: the ladder check runs when Admin opens Today, the Friday close and Saturday release are Admin buttons on the Payouts screen. A real backend runs them on a schedule (Friday night / Saturday) and the screens stay the same.
+34. **Rider commissions** move provisional → confirmed in the Friday close once their project is past the token stage (stage 6+); the spec does not say when they are confirmed.
+35. **6-month zero-defect bonus** (payout Option B) is not paid automatically yet; Admin can pay it as a manual item later (Phase 9 / real backend).
+36. **Jobs count** for the ladder = projects that reached handover with the worker in the team, plus jobs done before the app (seeded for demo workers).
+37. **KYC numbers.** Aadhaar/ID, bank and e-Shram numbers are typed on the number pad; only the last 4 digits are stored (the full numbers go to a KYC provider in a real build). The bank pad takes 12 digits in this build.
+38. **QC Inspector level** (trust ≥ 90, test, 5 shadow inspections, interview) is not automated: Admin decides it outside the ladder check.

@@ -50,7 +50,7 @@ const USERS = [
   ['u_c3', N('Sai Constructions', 'साई कन्स्ट्रक्शन्स', 'साई कंस्ट्रक्शन्स'), ['customer'], 'hadapsar', {}],
   ['u_c4', N('Om Residency', 'ओम रेसिडेन्सी', 'ओम रेजीडेंसी'), ['customer'], 'kharadi', {}],
   ['u_t1', N('Akash More', 'आकाश मोरे', 'आकाश मोरे'), ['trainee'], 'hinjewadi', { level: 'trainee', trust: 64, rating_sum: 13, rating_count: 3 }],
-  ['u_t2', N('Rahul Jadhav', 'राहुल जाधव', 'राहुल जाधव'), ['trainee'], 'wakad', { level: 'trainee', trust: 68, rating_sum: 17.5, rating_count: 4 }],
+  ['u_t2', N('Rahul Jadhav', 'राहुल जाधव', 'राहुल जाधव'), ['trainee'], 'wakad', { level: 'trainee', trust: 78, rating_sum: 23, rating_count: 5, jobs_seed: 5 }],
   ['u_tech1', N('Vikas Patil', 'विकास पाटील', 'विकास पाटिल'), ['technician', 'rider'], 'wakad', { level: 'technician', trust: 81, rating_sum: 92, rating_count: 20 }],
   ['u_tech2', N('Sunil Gaikwad', 'सुनील गायकवाड', 'सुनील गायकवाड'), ['technician'], 'hinjewadi', { level: 'technician', trust: 78, rating_sum: 53, rating_count: 12 }],
   ['u_tech3', N('Mahesh Kale', 'महेश काळे', 'महेश काले'), ['technician'], 'baner', { level: 'technician', trust: 74, rating_sum: 38, rating_count: 9 }],
@@ -284,7 +284,7 @@ export async function seedDemo() {
       level: extra.level || roles[0], lang: 'mr', pin_hash: await pinFor(id), face_ref: faceId,
       bank_masked: `XXXX XXXX ${String(1000 + i * 7).slice(-4)}`, kyc_status: extra.kyc_status || 'verified',
       eshram_id: roles.some((r) => ['trainee', 'technician', 'senior', 'rider'].includes(r)) ? `UW-${String(5000000000 + i)}` : null,
-      trust: extra.trust ?? 80, rating_sum: extra.rating_sum ?? 0, rating_count: extra.rating_count ?? 0, status: 'active',
+      trust: extra.trust ?? 80, rating_sum: extra.rating_sum ?? 0, rating_count: extra.rating_count ?? 0, status: 'active', jobs_seed: extra.jobs_seed || 0,
     });
   }
   await db.put('users', { id: 'u_bot', name: N('Sales Bot', 'सेल्स बॉट', 'सेल्स बॉट'), roles: ['salesbot'], system: true, phone: '0000000000', status: 'active' });

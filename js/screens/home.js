@@ -6,7 +6,11 @@ import { feedback } from '../feedback.js';
 import { icon } from '../icons.js';
 import { roleGroup, projectCard, sectionTitle } from './common.js';
 import { openHelp } from './help.js';
-import { reviewCard, pauseDecision, stopAlert } from './stages/install.js';
+import { reviewCard, stopAlert } from './stages/install.js';
+import { adminQueue } from './admin/queue.js';
+import { ownerPage } from './owner.js';
+import { applicantToday } from './applicant.js';
+import { ladderCard } from './ladder.js';
 
 async function earnText(role, step) {
   if (!step?.project || step.kind !== 'do') return null;
@@ -21,6 +25,9 @@ export default async function home(ctx) {
   if (ctx.role === 'rider') return (await import('./rider/today.js')).default(ctx);
   if (ctx.role === 'negotiator') return (await import('./sales/desk.js')).default(ctx);
   const { role, user, refresh } = ctx;
+  if (role === 'applicant') {
+    try { const a = await applicantToday(ctx); return { node: h('div', { class: 'today applicant' }, a.nodes), voice: a.voice }; } catch (e) { showError(e); }
+  }
   const group = roleGroup(role);
   const node = h('div', { class: 'today' });
   let voice;
@@ -46,9 +53,24 @@ export default async function home(ctx) {
     voice = [t('screen.today.voice', { name: L(user.name) }), title, who, earn].filter(Boolean).join('. ');
     node.append(nextStepCard({ title, who, earn, colour, voice }));
     node.append(routineStrip([t(`routine.${group}.morning`), t(`routine.${group}.day`), t(`routine.${group}.evening`)]));
+    // Admin: one exceptions-first queue. Owner: the one-page view. Workers: the spoken review card.
+    if (role === 'admin') {
+      const q = await adminQueue(ctx);
+      node.append(...q.nodes);
+      voice = `${voice}. ${t('queue.title', { n: q.count })}`;
+    }
+    if (role === 'owner') {
+      const o = await ownerPage();
+      node.append(...o.nodes);
+      voice = `${voice}. ${o.voice}`;
+    }
+    if (['trainee', 'technician', 'senior'].includes(role)) {
+      const lc = await ladderCard();
+      if (lc) node.append(lc);
+    }
 
     // Override requests waiting for a second admin / the owner.
-    const overrides = await api.listPendingOverrides();
+    const overrides = role === 'owner' ? await api.listPendingOverrides() : [];
     if (overrides.length) {
       node.append(sectionTitle(t('override.waiting'), 'warning'));
       for (const o of overrides) {
@@ -66,7 +88,7 @@ export default async function home(ctx) {
 
     // Below-floor prices wait for the Owner.
     const priceReqs = await api.listPriceRequests();
-    if (priceReqs.length && ['owner', 'admin'].includes(role)) {
+    if (priceReqs.length && role === 'owner') {
       node.append(sectionTitle(t('sales.priceDecisions'), 'crown'));
       for (const r of priceReqs) {
         node.append(card([
@@ -84,18 +106,11 @@ export default async function home(ctx) {
     const projects = await api.listProjects();
 
     // Installation exceptions: STOP WORK first (Admin + Owner), then pauses and proofs waiting for a person.
-    if (['admin', 'owner'].includes(role)) {
+    if (role === 'owner') {
       const stopped = projects.filter((p) => p.flags?.stop_work);
       if (stopped.length) {
         node.append(sectionTitle(t('stop.alerts'), 'stop'));
         stopped.forEach((p) => node.append(stopAlert(p, { role, refresh })));
-      }
-    }
-    if (role === 'admin') {
-      const pauses = projects.filter((p) => p.stage === 13).flatMap((p) => (p.install?.pauses || []).filter((ps) => !ps.approved && !ps.rejected && !ps.end).map((ps) => [p, ps]));
-      if (pauses.length) {
-        node.append(sectionTitle(t('pause.waitingTitle'), 'hourglass'));
-        pauses.forEach(([p, ps]) => node.append(pauseDecision(p, ps, refresh)));
       }
     }
     // QC morning visit list: site clearances, surprise checks due today (revealed only on the day), handovers.
@@ -106,10 +121,10 @@ export default async function home(ctx) {
       visits.forEach((p) => node.append(card(h('div', { class: 'kv' }, icon(p.stage === 14 ? 'shieldTick' : p.stage === 8 ? 'building' : 'thumbUp'), h('strong', {}, p.code), h('span', {}, t(`qc.visit.s${p.stage}`)), h('small', {}, L(p.site?.area))),
         { colour: p.stage === 14 ? 'red' : 'blue', onClick: () => { location.hash = `#/project/${p.id}`; }, testid: `visit-${p.id}` })));
     }
-    if (['qc', 'admin'].includes(role)) {
+    if (role === 'qc') {
       const queue = await api.reviewQueue();
       if (queue.length) {
-        node.append(sectionTitle(t(role === 'qc' ? 'review.critical' : 'review.title'), 'shield'));
+        node.append(sectionTitle(t('review.critical'), 'shield'));
         queue.slice(0, 6).forEach((q) => node.append(reviewCard(q, refresh)));
       }
     }
