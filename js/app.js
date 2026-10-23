@@ -1,6 +1,6 @@
 // Boot, hash router, role guard and the app shell (top bar, tab bar, Help button).
 import * as api from './api.js';
-import { t, L, onLangChange, setLang, getLang, LANG_ORDER } from './i18n.js';
+import { t, L, onLangChange, setLang, getLang, LANG_ORDER, ready as langReady, loadAllLangs } from './i18n.js';
 import { applyAll } from './theme.js';
 import { h, clear, iconButton, flushUndo, sheet, showError, bigButton } from './ui.js';
 import { icon, ROLE_ICON } from './icons.js';
@@ -55,12 +55,15 @@ function parseHash() {
 
 const root = document.getElementById('app');
 let renderSeq = 0;
+let dataReady = Promise.resolve();
+const NEEDS_NO_DATA = new Set(['welcome', 'install', 'guide']);
 
 async function render() {
   const seq = ++renderSeq;
   stopSpeaking();
   // A bottom sheet belongs to the screen that opened it: close it when the screen changes.
   document.querySelectorAll('.sheet, .sheet-backdrop').forEach((el) => el.remove());
+  if (!NEEDS_NO_DATA.has(parseHash().name || 'welcome')) await dataReady;
   let { name, params } = parseHash();
   const mode = api.getMode();
   const user = api.currentUser();
@@ -232,15 +235,11 @@ async function boot() {
   captureInstallPrompt();
   blockFileInput();
   firstTap();
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e));
-  }
-  try {
-    await api.init();
-  } catch (err) {
-    console.warn(err);
-    showError(err);
-  }
+  await langReady.catch(() => {});
+  // The demo database is built on the very first visit (a few seconds on a slow phone). The welcome
+  // screen does not need it, so it is drawn at once; every other screen waits for the data.
+  dataReady = api.init().catch((err) => { console.warn(err); showError(err); });
+  if (api.getMode() || api.currentUser()) await dataReady;
   window.addEventListener('hashchange', render);
   onLangChange(() => render());
   api.onChange((what) => {
@@ -255,6 +254,13 @@ async function boot() {
   document.addEventListener('visibilitychange', () => { if (document.hidden) flushUndo(); });
   window.addEventListener('pagehide', flushUndo);
   await render();
+  // Only after the first screen is up: the other languages and the offline cache (≈1.5 MB)
+  // download in the background, so a slow first visit is not held up by them.
+  const later = () => {
+    loadAllLangs().catch(() => {});
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e));
+  };
+  if (document.readyState === 'complete') setTimeout(later, 300); else window.addEventListener('load', () => setTimeout(later, 300), { once: true });
   document.documentElement.classList.add('ready');
 }
 

@@ -4,6 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = Number(process.argv[2] || process.env.PORT || 8080);
@@ -27,9 +28,10 @@ http.createServer((req, res) => {
   if (!file.startsWith(root)) { res.writeHead(403); return res.end(); }
   if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
   if (!fs.existsSync(file)) { res.writeHead(404); return res.end('not found'); }
-  res.writeHead(200, {
-    'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
-    'Cache-Control': 'no-cache',
-  });
-  fs.createReadStream(file).pipe(res);
+  const type = TYPES[path.extname(file)] || 'application/octet-stream';
+  // Text is gzipped, as every real static host does (JS/CSS shrink about 4×).
+  const gzip = /text|javascript|json|svg|manifest/.test(type) && /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', Vary: 'Accept-Encoding', ...(gzip ? { 'Content-Encoding': 'gzip' } : {}) });
+  const stream = fs.createReadStream(file);
+  (gzip ? stream.pipe(zlib.createGzip()) : stream).pipe(res);
 }).listen(port, () => console.log(`AIEC PWA on http://localhost:${port}`));

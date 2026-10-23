@@ -4,7 +4,7 @@ Installable, offline-first web app for AIEC (Pune): one Project record per lift,
 first lead photo to the last AMC visit. Built for people who cannot read well: every field
 screen **speaks first**, uses **pictures + colours**, big buttons and **zero typing**.
 
-> Status: Phases **1 – Foundation**, **2 – Rider**, **3 – Sales**, **4 – Agreement → QC clearance**, **5 – Supply & delivery**, **6 – Installation**, **7 – QC → licence → AMC** and **8 – Control** done (see "What's done"). Phase 9 (polish) follows.
+> Status: Phases **1 – Foundation**, **2 – Rider**, **3 – Sales**, **4 – Agreement → QC clearance**, **5 – Supply & delivery**, **6 – Installation**, **7 – QC → licence → AMC**, **8 – Control** and **9 – Polish** done (see "What's done"). All 9 phases are built.
 
 ## Run it
 
@@ -245,6 +245,22 @@ with resident tickets (0012). Ledger entries exist in every bucket and riders ha
   days below the level's floor. Every change is told to the worker. Workers see a spoken **"My level"**
   review card (Today and Me) with what is still needed.
 
+## What's done (Phase 9 – Polish)
+
+- **Accessibility** (checked by `a11y.spec.js` on key screens of every role, in the default, outdoor
+  and dark themes): every control has a name, every image an alt, every input a label, all text
+  ≥ 4.5:1 contrast (3:1 for large text). Fixes: darker dark-theme green/blue/red behind white labels,
+  progress percentages on their own pill (they vanished on the outdoor theme), leaderboard ranks.
+- **Voice + pictures only, in Marathi** (`voice.spec.js`): every field role's Today speaks Marathi on
+  open; every big button has a picture and a word; locked buttons say why; SOP cards and the safety
+  gate read their instruction; never more than 3 choices.
+- **Low-end Android** (`perf.spec.js`, Chrome CPU 4× slower + slow 3G): first visit shows the welcome
+  screen in ≈ 4.6 s with ≈ 180 KB (was 14 s / 709 KB) – only the language in use is loaded (others
+  later), boot modules are preloaded in parallel, the offline cache downloads after the first screen,
+  and the demo data is built while the welcome screen is shown. Installed app: Today ≈ 0.3 s.
+- **Empty and error states** are in the screenshot pass (unknown project, no service plan, empty chat).
+- `tools/serve.mjs` gzips text like a real static host; `tools/gen-preload.mjs` writes the preload list.
+
 ## Folder
 
 ```
@@ -272,6 +288,8 @@ node tools/check-imports.mjs
 npx playwright test
 ```
 
+- `a11y.spec.js`, `voice.spec.js`, `perf.spec.js` – Phase 9 accessibility, voice-only (Marathi) and
+  low-end phone checks (see above).
 - `screens.spec.js` – **screenshot pass** (run after every screen/CSS change): 27 key screens for every
   role at 360 px, the main ones also at 768 / 1280 px, saved to `screenshots/latest/` with a
   `contact-sheet.png`; fails on sideways scroll, raw keys or console errors.

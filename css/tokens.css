@@ -97,10 +97,11 @@
   --text: #eef2f8;
   --muted: #a9b4c4;
   --line: rgba(255, 255, 255, 0.12);
-  --c-do: #2e9e4f;   --on-do: #ffffff;
+  /* white labels ≥ 4.5:1 on these, and each colour ≥ 3:1 against the dark page */
+  --c-do: #23843f;   --on-do: #ffffff;
   --c-wait: #f2b400; --on-wait: #1a1400;
-  --c-stop: #e04545; --on-stop: #ffffff;
-  --c-info: #3b7ddd; --on-info: #ffffff;
+  --c-stop: #cc3333; --on-stop: #ffffff;
+  --c-info: #2f6cd0; --on-info: #ffffff;
   --c-neutral: #2a3240; --on-neutral: #eef2f8;
   --t-do: #6fd38c; --t-wait: #ffd257; --t-stop: #ff8a80; --t-info: #8cb8ff;
   --focus: #8cb8ff;

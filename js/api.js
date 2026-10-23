@@ -23,7 +23,7 @@ import {
 import {
   SURPRISE_ITEMS, surpriseResult, failsInWindow, visitDue, openRework, QC_FAIL_TRUST, RETRAIN_FAILS, VISIT_SPREAD_DAYS, AMC_ISSUES, AMC_PLAN_VISITS,
 } from './qc.js';
-import { t as tr } from './i18n.js';
+import { t as tr, loadAllLangs } from './i18n.js';
 import {
   baseCost, priceAt, levelOf, quoteAllowed, botCounter, paymentSchedule, leadScore, FIRST_LEVEL, FLOOR_LEVEL, BOT_LIMIT, DEFAULT_RATE_CARD,
 } from './pricing.js';
@@ -2128,6 +2128,7 @@ export async function giveSafetyConsent(projectId, { method = 'tap', clip = null
 
 async function makeSafetyPdf(p, day) {
   const { safetyPdf } = await import('./pdf.js');
+  await loadAllLangs(); // the statement is printed in all three languages
   const sd = p.install.safety[day];
   const users = await db.getAll('users');
   const uname = (id) => users.find((u) => u.id === id)?.name?.en || id;

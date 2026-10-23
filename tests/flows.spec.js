@@ -86,6 +86,8 @@ test('undo bar really cancels the action', async ({ page }) => {
 test('offline: capture evidence, badge shows, come online, outbox empties', async ({ page, context }) => {
   await startDemo(page, 'u_r1');
   await page.waitForFunction(async () => (await (await import('/js/api.js')).outboxCount()) === 0);
+  // Offline works once the app shell is cached (the service worker installs right after the first screen).
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 60000 });
   await context.setOffline(true);
   await takeBoardPhoto(page);
   await expect(page.getByTestId('gate-ev:lead.board')).toHaveClass(/done/, { timeout: 10000 });

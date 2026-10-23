@@ -63,3 +63,6 @@
 36. **Jobs count** for the ladder = projects that reached handover with the worker in the team, plus jobs done before the app (seeded for demo workers).
 37. **KYC numbers.** Aadhaar/ID, bank and e-Shram numbers are typed on the number pad; only the last 4 digits are stored (the full numbers go to a KYC provider in a real build). The bank pad takes 12 digits in this build.
 38. **QC Inspector level** (trust ≥ 90, test, 5 shadow inspections, interview) is not automated: Admin decides it outside the ladder check.
+39. **Performance numbers** are measured in desktop Chromium with CPU throttling 4× and slow-3G network emulation; a real ₹8,000 phone can differ. The first visit needs the offline cache (≈ 1.5 MB, downloaded in the background after the first screen) before the app works offline.
+40. **Contrast** is checked automatically on solid colours; text over photos, maps and charts is not measured (photos carry a dark stamp strip for readability).
+41. **Marathi speech** needs a Marathi or Hindi voice on the phone; the test checks what the app asks the phone to say, not the sound itself.

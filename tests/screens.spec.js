@@ -39,6 +39,10 @@ const SHOTS = [
   ['admin-project', 'u_admin', '/#/project/p0010'],
   ['owner-today', 'u_owner', '/#/today'],
   ['chat', 'u_c1', '/#/chat/p0009/main'],
+  // Error and empty states.
+  ['error-no-project', 'u_r1', '/#/project/p9999'],
+  ['empty-supplier-chat', 'u_nbfc', '/#/chat'],
+  ['amc-not-active', null, '/#/amc/p0001'],
 ];
 // Tablet and desktop: the screens with the most layout.
 const WIDE = new Set(['login', 'admin-today', 'admin-map', 'admin-reports', 'tech-install', 'owner-today', 'customer-project', 'join']);

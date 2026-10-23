@@ -1,11 +1,28 @@
 // Translation, language switching and number/date formatting.
 // Every user-visible string goes through t('key').
+// English is built in (it is the fallback); Marathi/Hindi load when needed (≈120 KB each), so a
+// first visit on a slow network downloads only the language in use.
 import en from './lang/en.js';
-import mr from './lang/mr.js';
-import hi from './lang/hi.js';
 
-export const LANGS = { en, mr, hi };
 export const LANG_ORDER = ['en', 'mr', 'hi'];
+export const LANGS = { en };
+const LOADERS = { mr: () => import('./lang/mr.js'), hi: () => import('./lang/hi.js') };
+// Names on the language buttons are needed before the other language files arrive.
+const LANG_LABELS = {
+  en: { 'lang.name': 'English', 'lang.glyph': 'A', 'lang.short': 'EN' },
+  mr: { 'lang.name': 'मराठी', 'lang.glyph': 'म', 'lang.short': 'मरा' },
+  hi: { 'lang.name': 'हिंदी', 'lang.glyph': 'हि', 'lang.short': 'हिं' },
+};
+const loading = {};
+
+export function loadLang(code) {
+  if (LANGS[code] || !LOADERS[code]) return Promise.resolve(LANGS[code] || null);
+  loading[code] ||= LOADERS[code]().then((m) => { LANGS[code] = m.default; return m.default; });
+  return loading[code];
+}
+
+// All three (PDFs and the WhatsApp preview show every language).
+export function loadAllLangs() { return Promise.all(LANG_ORDER.map(loadLang)); }
 // Locale used for speech and dates. Latin digits everywhere so numbers look the same in all languages.
 export const SPEECH_LANG = { en: 'en-IN', mr: 'mr-IN', hi: 'hi-IN' };
 
@@ -15,19 +32,22 @@ const listeners = new Set();
 function initialLang() {
   try {
     const saved = localStorage.getItem(KEY);
-    if (saved && LANGS[saved]) return saved;
+    if (saved && LANG_ORDER.includes(saved)) return saved;
   } catch { /* storage blocked */ }
   const nav = (navigator.language || 'en').slice(0, 2);
-  return LANGS[nav] ? nav : 'en';
+  return LANG_ORDER.includes(nav) ? nav : 'en';
 }
 
 let lang = initialLang();
 document.documentElement.lang = lang;
+// The app waits for this before the first screen.
+export const ready = loadLang(lang).catch(() => { lang = 'en'; });
 
 export function getLang() { return lang; }
 
-export function setLang(next) {
-  if (!LANGS[next] || next === lang) return;
+export async function setLang(next) {
+  if (!LANG_ORDER.includes(next) || next === lang) return;
+  await loadLang(next);
   lang = next;
   try { localStorage.setItem(KEY, next); } catch { /* ignore */ }
   document.documentElement.lang = next;
@@ -50,7 +70,7 @@ export function onLangChange(fn) {
 // t('key', {name: 'x'}) -> translated string with {name} filled in.
 // A missing key shows as ⟦key⟧ so tests can spot it.
 export function t(key, params, forLang = lang) {
-  let s = LANGS[forLang][key];
+  let s = LANG_LABELS[forLang]?.[key] ?? LANGS[forLang]?.[key];
   if (s == null) s = LANGS.en[key];
   if (s == null) return `⟦${key}⟧`;
   if (params) s = s.replace(/\{(\w+)\}/g, (m, k) => (params[k] != null ? params[k] : m));
