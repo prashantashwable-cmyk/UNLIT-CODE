@@ -7,6 +7,7 @@ import { checkGate, statusColour, STAGES, isStageOwner, progressPct, endOfDayIST
 import { weightedRating, trustScore } from '../js/trust.js';
 import { bucketTotals, moveEntries } from '../js/ledger.js';
 import * as sop from '../js/sop.js';
+import * as qcm from '../js/qc.js';
 import { stageClock } from '../js/stages.js';
 import en from '../js/lang/en.js';
 import mr from '../js/lang/mr.js';
@@ -497,4 +498,48 @@ test('permissions: install work for the team only; STOP WORK by team, QC, admin;
   expect(can(admin, 'admin', 'install.decide', p)).toBe(true);
   expect(can(tech, 'technician', 'install.decide', p)).toBe(false);
   expect(can(owner, 'owner', 'install.decide', p)).toBe(false);
+});
+
+// ---------- Phase 7: surprise QC, rework, AMC (qc.js) and redaction of the surprise date ----------
+
+test('qc: surprise result, critical items, fails in 60 days, visit day', () => {
+  const all = Object.fromEntries(qcm.SURPRISE_ITEMS.map((i) => [i.key, 'pass']));
+  expect(qcm.surpriseResult(all)).toBe('pass');
+  expect(qcm.surpriseResult({ ...all, brakes: 'fail' })).toBe('fail');
+  expect(qcm.surpriseResult({ rails: 'pass' })).toBeNull();
+  expect(qcm.CRITICAL_ITEMS).toEqual(['earthing', 'brakes', 'governor', 'interlocks', 'final']);
+  const now = Date.now();
+  const runs = [
+    { result: 'fail', team: ['t1'], time: now - 10 * D },
+    { result: 'fail', team: ['t1', 't2'], time: now - 70 * D },
+    { result: 'pass', team: ['t1'], time: now - D },
+    { result: 'fail', team: ['t1'], time: now },
+  ];
+  expect(qcm.failsInWindow(runs, 't1', now)).toBe(2);
+  expect(qcm.failsInWindow(runs, 't2', now)).toBe(0);
+  expect(qcm.visitDue({ date: '2026-10-23' }, '2026-10-22')).toBe(false);
+  expect(qcm.visitDue({ date: '2026-10-23' }, '2026-10-23')).toBe(true);
+  expect(qcm.openRework([{ type: 'qc_fail', status: 'open' }, { type: 'qc_fail', status: 'fixed' }, { type: 'dispute', status: 'open' }])).toHaveLength(1);
+});
+
+test('surprise QC date: only admin/owner see it ahead; QC from that morning; the team never', () => {
+  const p = { id: 'p1', stage: 14, team: { lead_tech: 't1', techs: [], qc_id: 'q1' }, qc_visit: { date: '2999-01-01', runs: [] } };
+  expect(viewProject(admin, 'admin', p).qc_visit.date).toBe('2999-01-01');
+  expect(viewProject(qc, 'qc', p).qc_visit).toEqual({ hidden: true, result: null, runs: [] });
+  expect(viewProject(tech, 'technician', p).qc_visit.date).toBeUndefined();
+  const today = { ...p, qc_visit: { date: '2000-01-01', runs: [] } };
+  expect(viewProject(qc, 'qc', today).qc_visit.date).toBe('2000-01-01');
+  expect(viewProject(tech, 'technician', today).qc_visit.hidden).toBe(true);
+});
+
+test('permissions: rework by the team, inspection and licence by admin, AMC work by the AMC technician', () => {
+  const p = { id: 'p1', stage: 16, team: { lead_tech: 't1', techs: [], qc_id: 'q1' }, amc: { tech_id: 't9' } };
+  expect(can(tech, 'technician', 'rework.fix', p)).toBe(true);
+  expect(can(admin, 'admin', 'inspection.record', p)).toBe(true);
+  expect(can(qc, 'qc', 'inspection.record', p)).toBe(false);
+  expect(can(owner, 'owner', 'licence.save', p)).toBe(false);
+  expect(can(techOther, 'technician', 'amc.work', p)).toBe(true);
+  expect(can(tech, 'technician', 'amc.work', p)).toBe(false);
+  expect(can(cust, 'customer', 'handover.rate', { ...p, customer_id: 'c1' })).toBe(true);
+  expect(can(cust2, 'customer', 'handover.rate', { ...p, customer_id: 'c1' })).toBe(false);
 });

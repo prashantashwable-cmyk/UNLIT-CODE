@@ -150,6 +150,13 @@ const MATRIX = {
   'install.work': { trainee: isTeamWorker, technician: isTeamWorker, senior: isTeamWorker },
   'install.stopWork': { trainee: isTeamWorker, technician: isTeamWorker, senior: isTeamWorker, qc: isQC, admin: always },
   'install.decide': { admin: always },
+  // Stage 14–16: rework by the team, inspection + licence by Admin, AMC visits/tickets by the AMC technician.
+  'rework.fix': { trainee: isTeamWorker, technician: isTeamWorker, senior: isTeamWorker },
+  'qc.surprise': { qc: isQC },
+  'inspection.record': { admin: always },
+  'licence.save': { admin: always },
+  'amc.work': { technician: (u, p) => p.amc?.tech_id === u.id, senior: (u, p) => p.amc?.tech_id === u.id, admin: always },
+  'handover.rate': { customer: isCustomer },
   'stage.advance': { admin: always }, // owner roles of the stage are added in stages.canAdvance
   'override.request': { admin: always },
   'override.confirm': { admin: always, owner: always },
@@ -246,10 +253,18 @@ export function viewProject(user, role, project, now = Date.now()) {
   } else delete v.payments;
 
   if (!c('project.emi')) delete v.emi;
+  // Surprise QC: only Admin/Owner know the date in advance; the QC Inspector sees it from that morning.
+  if (project.qc_visit && !['admin', 'owner'].includes(role)) {
+    const due = role === 'qc' && istDay(now) >= project.qc_visit.date;
+    if (!due) v.qc_visit = { hidden: true, result: v.qc_visit.result || null, runs: v.qc_visit.runs || [] };
+  }
   if (!c('project.agreement')) delete v.agreement;
 
   // Worker phone numbers never travel inside a project view.
   return v;
 }
+
+// IST calendar day, e.g. "2026-10-23".
+function istDay(ts) { return new Date(ts + 5.5 * 3600 * 1000).toISOString().slice(0, 10); }
 
 function round2(n) { return n == null ? n : Math.round(n * 100) / 100; }

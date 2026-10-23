@@ -38,6 +38,7 @@ export function msgText(c, lang) {
       else if (k === 'type' || k === 'finish') params[k] = t(`spec.${v}`, null, lang);
       else if (k === 'reason') params[k] = t(`pause.${v}`, null, lang);
       else if (k === 'kind') params[k] = t(`incident.${v}`, null, lang);
+      else if (k === 'issue') params[k] = t(`amc.issue.${v}`, null, lang);
       else if (v && typeof v === 'object') params[k] = lang ? (v[lang] || v.en) : L(v);
       else params[k] = v;
     }

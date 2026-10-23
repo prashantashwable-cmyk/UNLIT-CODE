@@ -103,7 +103,7 @@ export const STAGES = [
     ],
   },
   {
-    n: 14, key: 'qcInspect', owners: ['qc', 'admin'], limitH: 72,
+    n: 14, key: 'qcInspect', owners: ['qc', 'admin'], limitH: 72, money: 'install.confirm',
     reqs: [
       approval('qc.surprise', ['qc']),
       approval('qc.critical', ['qc']),

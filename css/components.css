@@ -473,3 +473,30 @@ button.card { cursor: pointer; font: inherit; }
 .end-day > .ic { width: 64px; height: 64px; color: var(--c-money, #2e7d32); }
 .install-panel .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .install-panel .btn-row > .big-btn { flex: 1 1 140px; }
+
+/* ---------- Phase 7: QC, handover, licence, AMC ---------- */
+.qc-sheet { display: flex; flex-direction: column; gap: 8px; }
+.qc-row { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 6px; border-radius: 12px; border: 2px solid var(--line); }
+.qc-row .thumb { width: 56px; height: 42px; object-fit: cover; border-radius: 6px; }
+.qc-row.pass { border-color: var(--c-do); }
+.qc-row.fail { border-color: var(--c-stop); }
+.qc-row .icon-btn { width: 48px; height: 48px; }
+.stars { display: flex; gap: 6px; justify-content: center; margin: 8px 0; }
+.star-btn { width: 56px; height: 56px; border-radius: 50%; border: 1px solid var(--line); background: var(--card-solid); color: var(--muted, #888); cursor: pointer; display: grid; place-items: center; }
+.star-btn .ic { width: 32px; height: 32px; }
+.star-btn.on { color: #f5a400; border-color: #f5a400; }
+.field { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+.qr-card { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.qr-a6 { width: min(105mm, 100%); aspect-ratio: 105 / 148; border: 2px solid #111; border-radius: 8px; padding: 12px; background: #fff; color: #111; display: flex; flex-direction: column; align-items: center; justify-content: space-between; text-align: center; }
+.qr-img { width: 75%; }
+.qr-img svg { width: 100%; height: auto; display: block; }
+.qr-link { word-break: break-all; font-size: 10px; }
+.amc-public h1 { display: flex; align-items: center; gap: 8px; }
+.done-big { text-align: center; padding: 32px 0; }
+.done-big > .ic { width: 96px; height: 96px; color: var(--c-do); }
+@media print {
+  body.printing-qr > *:not(.sheet) { display: none !important; }
+  body.printing-qr .sheet { position: static; box-shadow: none; }
+  body.printing-qr .sheet-head, body.printing-qr .qr-card > .big-btn { display: none; }
+  body.printing-qr .qr-a6 { width: 105mm; height: 148mm; }
+}

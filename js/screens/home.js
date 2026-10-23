@@ -98,6 +98,14 @@ export default async function home(ctx) {
         pauses.forEach(([p, ps]) => node.append(pauseDecision(p, ps, refresh)));
       }
     }
+    // QC morning visit list: site clearances, surprise checks due today (revealed only on the day), handovers.
+    if (role === 'qc') {
+      const visits = projects.filter((p) => p.stage === 8 || p.stage === 15 || (p.stage === 14 && !p.qc_visit?.hidden && p.qc_visit?.date && p.qc_visit?.result !== 'pass'));
+      node.append(sectionTitle(t('qc.visitsToday'), 'shieldTick'));
+      if (!visits.length) node.append(emptyState('shieldTick', t('qc.noVisits')));
+      visits.forEach((p) => node.append(card(h('div', { class: 'kv' }, icon(p.stage === 14 ? 'shieldTick' : p.stage === 8 ? 'building' : 'thumbUp'), h('strong', {}, p.code), h('span', {}, t(`qc.visit.s${p.stage}`)), h('small', {}, L(p.site?.area))),
+        { colour: p.stage === 14 ? 'red' : 'blue', onClick: () => { location.hash = `#/project/${p.id}`; }, testid: `visit-${p.id}` })));
+    }
     if (['qc', 'admin'].includes(role)) {
       const queue = await api.reviewQueue();
       if (queue.length) {

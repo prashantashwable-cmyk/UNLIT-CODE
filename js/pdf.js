@@ -131,3 +131,68 @@ export async function safetyPdf(data) {
   await line(`${L.generated}: ${ist(Date.now())}`, { size: 8, colour: '#555555' });
   return doc.output('blob');
 }
+
+/**
+ * Signed document PDF (agreement, material handover, lift handover, NOC).
+ * data: {company, title, code, sections:[{title, text}], signatures:[{name, role, method, time, gps, selfie}],
+ *        note, labels:{signatures, generated, method, gps}}
+ * A signature = name + method + time + GPS + selfie frame (spec section 12).
+ */
+export async function documentPdf(data) {
+  const JsPDF = await loadJsPdf();
+  const doc = new JsPDF({ unit: 'mm', format: 'a4' });
+  const W = 210; const M = 16; const BOTTOM = 282;
+  let y = 0;
+  const room = (hmm) => { if (y + hmm > BOTTOM) { doc.addPage(); y = M; } };
+  const latin = (s) => /^[\x20-\x7E₹–·±\n]*$/.test(s);
+  const clean = (s) => s.replace(/[₹–·±]/g, (c) => ({ '₹': 'Rs ', '–': '-', '·': '|', '±': '+/-' }[c]));
+  const para = async (text, { size = 10, bold = false, colour = '#111111' } = {}) => {
+    if (latin(text)) {
+      doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size); doc.setTextColor(colour);
+      for (const ln of doc.splitTextToSize(clean(text), W - 2 * M)) { room(size * 0.45); doc.text(ln, M, y + size * 0.35); y += size * 0.45; }
+      y += 1.5;
+    } else {
+      const img = await textImage(text, { px: size * 3, bold, colour, maxW: 2400 });
+      const hmm = size * 0.55; room(hmm);
+      doc.addImage(img.url, 'PNG', M, y, Math.min(W - 2 * M, (img.w / img.h) * hmm), hmm);
+      y += hmm + 1.5;
+    }
+  };
+
+  doc.setFillColor('#0b5394'); doc.rect(0, 0, W, 26, 'F');
+  doc.setTextColor('#ffffff'); doc.setFont('helvetica', 'bold'); doc.setFontSize(15);
+  doc.text(data.company, M, 11);
+  doc.setFontSize(12); doc.setFont('helvetica', 'normal');
+  doc.text(clean(`${data.title} | ${data.code}`), M, 19);
+  y = 34;
+  for (const s of data.sections) {
+    await para(s.title, { size: 11, bold: true });
+    await para(s.text);
+    y += 1;
+  }
+  if (data.signatures?.length) {
+    y += 2; room(12);
+    await para(data.labels.signatures, { size: 12, bold: true });
+    for (const sg of data.signatures) {
+      room(34);
+      const top = y;
+      const img = sg.selfie ? await imageData(sg.selfie, 300) : null;
+      doc.setDrawColor('#999999'); doc.rect(M, top, 30, 30);
+      if (img) doc.addImage(img.url, 'JPEG', M, top, 30, 30);
+      const x = M + 34;
+      doc.setTextColor('#111111'); doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+      const nm = latin(sg.name) ? clean(sg.name) : null;
+      if (nm) doc.text(nm, x, top + 5);
+      else { const ti = await textImage(sg.name, { px: 30, bold: true }); doc.addImage(ti.url, 'PNG', x, top + 1, (ti.w / ti.h) * 6, 6); }
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5);
+      doc.text(clean(sg.role), x, top + 11);
+      doc.text(clean(`${data.labels.method}: ${sg.method}`), x, top + 16);
+      doc.text(ist(sg.time), x, top + 21);
+      doc.text(sg.gps ? `${data.labels.gps}: ${sg.gps.lat.toFixed(6)}, ${sg.gps.lng.toFixed(6)}` : `${data.labels.gps}: -`, x, top + 26);
+      y = top + 34;
+    }
+  }
+  if (data.note) { y += 2; await para(data.note, { size: 8, colour: '#b00020' }); }
+  await para(`${data.labels.generated}: ${ist(Date.now())}`, { size: 8, colour: '#555555' });
+  return doc.output('blob');
+}

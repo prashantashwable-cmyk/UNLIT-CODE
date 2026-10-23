@@ -9,23 +9,7 @@ import { feedback } from '../../feedback.js';
 import { recordVoice } from '../../chat.js';
 import { payments } from '../../payments.js';
 import { sectionTitle } from '../common.js';
-
-// The agreement as sections, in the current language.
-export function agreementSections(p, customerName, rules = {}) {
-  const pay = Object.fromEntries((p.payments || []).map((r) => [r.milestone, formatINR(r.amount)]));
-  const spec = p.spec || {};
-  return [
-    { title: t('agr.h.parties'), text: t('agr.parties', { customer: customerName, address: L(p.site?.address) || L(p.site?.area) }) },
-    { title: t('agr.h.lift'), text: t('agr.spec', { floors: spec.floors || '-', stops: spec.stops || '-', type: t(`spec.${spec.type || 'automatic'}`), finish: t(`spec.${spec.finish || 'SS'}`), load: spec.load_kg || 408 }) },
-    { title: t('agr.h.price'), text: t('agr.price', { amount: formatINR(p.price?.amount), gst: rules.gst_pct ?? 18 }) },
-    { title: t('agr.h.payments'), text: t('agr.schedule', { token: pay.token, delivery: pay.delivery, cabin: pay.cabin, handover: pay.handover }) },
-    { title: t('agr.h.refund'), text: t(rules.refund_rule === 'always' ? 'agr.refundAlways' : 'agr.refundQc') },
-    { title: t('agr.h.duties'), text: t('agr.duties') },
-    { title: t('agr.h.licence'), text: t('agr.licence') },
-    { title: t('agr.h.nonSolicit'), text: t('agr.nonSolicit') },
-    { title: t('agr.h.stamp'), text: t('agr.estamp', { ref: p.agreement?.estamp_ref || t('agr.estampPending') }) },
-  ];
-}
+import { agreementSections } from '../../docs.js';
 
 // Full-screen reader: one section at a time, spoken; Next moves on. Resolves true when all were read.
 function readAloud(sections) {

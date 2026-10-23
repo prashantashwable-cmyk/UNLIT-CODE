@@ -7,7 +7,7 @@ import {
   can, assertCan, viewProject, PermissionError, canSeeUserPhone, maskPhone, FIELD_ROLES,
 } from './permissions.js';
 import { checkGate, isStageOwner, nextStage, statusColour, stageDef } from './stages.js';
-import { bucketTotals } from './ledger.js';
+import { bucketTotals, moveEntries } from './ledger.js';
 import { weightedRating } from './trust.js';
 import { lastKnownFix, setDemoMode, distanceM, GEOFENCE_M, speedKmh, SUSPICIOUS_KMH } from './geo.js';
 import {
@@ -19,6 +19,9 @@ import {
   stepDef, substageSteps, substageComplete, substageAuthors, peerDone, openPause, safetyFor, workLock, dayKey, stepPay, needsReview,
   reviewerRoles, SAFETY_PHOTOS, PAUSE_REASONS, PEER_PHOTOS, LAST_SUBSTAGE, ARRIVE_M, PEER_DEFECT_TRUST,
 } from './sop.js';
+import {
+  SURPRISE_ITEMS, surpriseResult, failsInWindow, visitDue, openRework, QC_FAIL_TRUST, RETRAIN_FAILS, VISIT_SPREAD_DAYS, AMC_ISSUES, AMC_PLAN_VISITS,
+} from './qc.js';
 import { t as tr } from './i18n.js';
 import {
   baseCost, priceAt, levelOf, quoteAllowed, botCounter, paymentSchedule, leadScore, FIRST_LEVEL, FLOOR_LEVEL, BOT_LIMIT,
@@ -373,6 +376,7 @@ export async function getFileURL(fileId) {
     const p = await rawProject(f.project_id);
     if (!can(user, role, 'project.view', p)) throw new PermissionError('file.view');
     if (f.kind === 'site' && !can(user, role, 'project.sitePhotos', p)) throw new PermissionError('file.view');
+    if (f.doc === 'agreement' && !can(user, role, 'project.agreement', p)) throw new PermissionError('file.view');
   } else if (f.owner_id !== user.id && role !== 'admin') {
     throw new PermissionError('file.view');
   }
@@ -469,7 +473,7 @@ const GATE_SUBJECT = {
   'peer.check': ['install.'],
 };
 
-export async function approveGate(projectId, gateKey, { method = 'face' } = {}) {
+export async function approveGate(projectId, gateKey, { method = 'face', selfie = null } = {}) {
   const { user, role } = requireLogin();
   const p = await rawProject(projectId);
   assertCan(user, role, 'gate.approve', p, { gate: gateKey });
@@ -477,6 +481,8 @@ export async function approveGate(projectId, gateKey, { method = 'face' } = {}) 
     db.getByIndex('evidence', 'project_id', p.id), db.getByIndex('approvals', 'project_id', p.id),
   ]);
   if (gateKey === 'qc.clearance' && QC_ITEMS.some((k) => p.qc_clearance?.items?.[k] !== 'pass')) throw new ApiError('qc.itemsFirst');
+  // Surprise QC and the critical sign-off need a passed surprise check made in this stage.
+  if ((gateKey === 'qc.surprise' || gateKey === 'qc.critical') && !surprisePassed(p)) throw new ApiError('qc.surpriseFirst');
   const subject = GATE_SUBJECT[gateKey];
   if (subject && evidence.some((e) => e.by === user.id && subject.some((pre) => e.step_key.startsWith(pre)))) {
     throw new PermissionError('gate.approve', 'self-approval');
@@ -484,12 +490,17 @@ export async function approveGate(projectId, gateKey, { method = 'face' } = {}) 
   if (approvals.some((a) => a.gate_key === gateKey && a.by === user.id && a.stage === p.stage && a.time_device >= (p.stage_since || 0))) {
     throw new ApiError('gate.alreadyApproved');
   }
+  // A signature keeps its selfie frame and GPS (used on the handover and NOC PDFs).
+  const selfieId = selfie?.blob ? await saveFile(selfie.blob, { kind: 'selfie', owner_id: user.id, project_id: p.id, sha256: selfie.sha256 }) : null;
+  const fix = lastKnownFix();
   const rec = {
     id: db.uid('ap'), project_id: p.id, stage: p.stage, gate_key: gateKey, by: user.id, role, method,
-    assisted_by: session.assistedBy?.id || null, time_device: Date.now(), time_server: null,
+    assisted_by: session.assistedBy?.id || null, selfie_file: selfieId, gps: fix ? { lat: fix.lat, lng: fix.lng } : null,
+    time_device: Date.now(), time_server: null,
   };
   await write('approvals', rec);
   await logEvent(p.id, 'gate.approve', { note: gateKey, proof_ids: [rec.id] });
+  if (gateKey === 'handover' && p.stage === 15) await maybeIssueNoc(p);
   if (gateKey === 'site.start' && p.stage === 13 && !p.install?.site_start) {
     // The 14-day installation clock starts now.
     p.install = { ...(p.install || {}), site_start: Date.now(), substage: p.install?.substage || 1 };
@@ -535,11 +546,27 @@ async function doAdvance(p) {
 async function leastBusy(roleList, key) {
   const [users, all] = await Promise.all([db.getAll('users'), db.getAll('projects')]);
   const people = users.filter((u) => u.roles.some((r) => roleList.includes(r)) && u.status === 'active' && !u.system);
-  const load = (id) => all.filter((x) => (key === 'techs' ? x.team?.lead_tech === id : x.team?.[key] === id) && x.stage < 16).length;
+  const load = (id) => all.filter((x) => (key === 'techs' ? x.team?.lead_tech === id || (x.team?.techs || []).includes(id) : x.team?.[key] === id) && x.stage < 16).length;
   return people.sort((a, b) => load(a.id) - load(b.id))[0] || null;
 }
 
 async function onEnterStage(p, n) {
+  if (n === 12) {
+    // Material handover is signed: keep its PDF with the project.
+    try { await ensureDoc(p, 'material'); } catch (e) { console.warn('material pdf', e); }
+  }
+  if (n === 14) {
+    // The system picks the surprise QC day; the QC Inspector sees it only from that morning.
+    const day = dayKey(Date.now() + Math.floor(Math.random() * VISIT_SPREAD_DAYS) * 24 * 3600 * 1000);
+    p.qc_visit = { date: day, runs: [], result: null };
+    await db.put('projects', p);
+    await logEvent(p.id, 'qc.scheduled');
+  }
+  if (n === 16) {
+    // Handover done: the team's access to this project ends 30 days from now (unless AMC).
+    p.handover_time = Date.now();
+    await db.put('projects', p);
+  }
   if (n === 9 && !p.team?.supplier_id) {
     const s9 = await leastBusy(['supplier'], 'supplier_id');
     if (s9) { p.team = { ...(p.team || {}), supplier_id: s9.id }; await db.put('projects', p); await logEvent(p.id, 'supplier.assigned'); }
@@ -552,8 +579,10 @@ async function onEnterStage(p, n) {
     const now = Date.now();
     p.container = { ...(p.container || {}), from, dispatched_time: now, eta: now + (rules.container_eta_hours || 3) * 3600 * 1000, arrived_time: null, lock: 'locked' };
     if (!p.team?.lead_tech) {
+      // A lead technician plus a trainee: the peer relay needs a second person to check each sub-stage.
       const lead = await leastBusy(['technician', 'senior'], 'techs');
-      if (lead) p.team = { ...(p.team || {}), lead_tech: lead.id, techs: p.team?.techs || [] };
+      const helper = p.team?.techs?.length ? null : await leastBusy(['trainee'], 'techs');
+      if (lead) p.team = { ...(p.team || {}), lead_tech: lead.id, techs: p.team?.techs?.length ? p.team.techs : (helper ? [helper.id] : []) };
     }
     await db.put('projects', p);
     await logEvent(p.id, 'container.dispatched');
@@ -587,6 +616,22 @@ async function moneyEvent(p, key) {
   if ((key === 'delivery' || key === 'cabin') && p.team?.supplier_id && p.costing?.supply_price) {
     const pct = (rules.supplier_split || { delivery: 75, cabin: 25 })[key];
     await addLedger(p.team.supplier_id, p.id, `supply.${key}`, Math.round((p.costing.supply_price * pct) / 100), 'payable');
+  }
+  if (key === 'install.confirm') {
+    // Surprise QC + inspection passed: the team's provisional installation earnings become confirmed.
+    const all = (await db.getAll('ledger')).filter((l) => l.project_id === p.id && l.source_key.startsWith('install.'));
+    const totals = {};
+    for (const l of all) {
+      const k = `${l.user_id}|${l.source_key}`;
+      totals[k] = (totals[k] || 0) + (l.bucket === 'provisional' ? l.amount : 0);
+    }
+    for (const [k, amount] of Object.entries(totals)) {
+      if (amount <= 0) continue;
+      const [user_id, source_key] = k.split('|');
+      for (const e of moveEntries({ user_id, project_id: p.id, source_key, amount, from: 'provisional', to: 'confirmed', time: Date.now(), makeId: db.uid })) {
+        await write('ledger', { ...e, time_device: e.time, time_server: null });
+      }
+    }
   }
   if (key === 'token' && p.lead?.rider_id) {
     await addLedger(p.lead.rider_id, p.id, 'rider.main', rules.rider_main_commission, 'provisional');
@@ -872,10 +917,10 @@ function requireDesk() {
 }
 
 // Message from the bot (or the site contact) into the project chat. content = {key, params} so it shows in every language.
-async function postMessage(p, { type = 'bot', content, by, file_ids = null, buttons = null, file_id = null }) {
+async function postMessage(p, { type = 'bot', content, by, file_ids = null, buttons = null, file_id = null, thread = 'main' }) {
   const who = by || actor();
   const rec = {
-    id: db.uid('msg'), project_id: p.id, thread: 'main', by: who.user?.id || who.id, by_name: who.user?.name || who.name, role: who.role,
+    id: db.uid('msg'), project_id: p.id, thread, by: who.user?.id || who.id, by_name: who.user?.name || who.name, role: who.role,
     type, content, file_ids, buttons, file_id, gate: null, time_device: Date.now(), time_server: null,
   };
   await write('messages', rec);
@@ -1266,6 +1311,11 @@ export async function recordPayment(projectId, milestone, result) {
   await db.put('projects', p);
   await queue('projects', p.id, 'payment');
   await logEvent(p.id, result.status === 'success' ? 'payment.paid' : 'payment.failed', { note: `${milestone}:${row.amount}` });
+  if (result.status === 'success' && milestone === 'handover') {
+    for (const i of p.issues || []) if (i.type === 'dispute' && i.status === 'open') { i.status = 'closed'; i.closed_time = Date.now(); }
+    await db.put('projects', p);
+    await maybeIssueNoc(p);
+  }
   if (result.status === 'success') await autoAdvance(p);
   return row.status;
 }
@@ -2266,3 +2316,343 @@ export async function endDay(projectId) {
   await logEvent(p.id, 'install.endDay');
   return { steps: new Set(mine.map((e) => e.step_key)).size, amount: earned.reduce((s, l) => s + l.amount, 0), substage: currentSubstage(p) };
 }
+
+// ---------- stage 14: surprise QC, rework, Electrical Inspector ----------
+
+function lastRun(p) { return (p.qc_visit?.runs || []).at(-1) || null; }
+function surprisePassed(p) {
+  const r = lastRun(p);
+  return !!r && r.result === 'pass' && r.time >= (p.stage_since || 0);
+}
+const teamOf = (p) => [p.team?.lead_tech, ...(p.team?.techs || [])].filter(Boolean);
+
+// QC surprise check: one photo per item (one camera burst) and pass/fail for each item.
+export async function saveSurpriseQc(projectId, { items = {}, shots = [] } = {}) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'qc.surprise', p);
+  if (p.stage !== 14 || !p.qc_visit) throw new ApiError('qc.notNow');
+  if (!visitDue(p.qc_visit, dayKey())) throw new ApiError('qc.notToday');
+  if (surprisePassed(p)) throw new ApiError('qc.alreadyPassed');
+  if (openRework(p.issues).length) throw new ApiError('qc.reworkPending');
+  const result = surpriseResult(items);
+  if (!result) throw new ApiError('qc.markAll');
+  if (shots.length < SURPRISE_ITEMS.length) throw new ApiError('qc.photosFirst');
+  const ev = await saveEvidence(p, { user, role }, {
+    stepKey: 'qc.surprise', files: shots.map((x) => ({ blob: x.blob, sha256: x.sha256 })), stamp: shots[0].stamp, ai: { result: 'pass' }, meta: { items, result },
+  });
+  const now = Date.now();
+  const team = teamOf(p);
+  p.qc_visit.runs = [...(p.qc_visit.runs || []), { time: now, by: user.id, result, items, evidence_id: ev.id, team }];
+  p.qc_visit.result = result;
+  if (result === 'fail') {
+    // Rework task to the same team, no pay for rework, penalty points; 2 fails in 60 days → retraining.
+    const failed = SURPRISE_ITEMS.filter((i) => items[i.key] === 'fail').map((i) => i.key);
+    p.issues = [...(p.issues || []), ...failed.map((item) => ({ id: db.uid('iss'), type: 'qc_fail', item, time: now, by: user.id, rework_team: team, evidence_id: ev.id, status: 'open' }))];
+    await db.put('projects', p);
+    const allRuns = (await db.getAll('projects')).flatMap((x) => x.qc_visit?.runs || []);
+    for (const id of team) {
+      const u = await db.get('users', id);
+      if (!u) continue;
+      u.trust = Math.max(0, (u.trust ?? 0) - QC_FAIL_TRUST);
+      if (failsInWindow(allRuns, id, now) >= RETRAIN_FAILS && !u.retraining) {
+        u.retraining = { since: now, reason: 'qc_fails' };
+        await logEvent(p.id, 'worker.retraining', { note: id, loud: true });
+      }
+      await db.put('users', u);
+    }
+    await logEvent(p.id, 'qc.fail', { note: failed.join(','), proof_ids: [ev.id], loud: true });
+    await postMessage(p, { type: 'text', content: { key: 'qc.msg.fail', params: { code: p.code, n: failed.length } } });
+  } else {
+    for (const i of p.issues || []) if (i.type === 'qc_fail' && i.status === 'fixed') { i.status = 'closed'; i.closed_time = now; }
+    await logEvent(p.id, 'qc.pass', { proof_ids: [ev.id] });
+  }
+  await saveProject(p, 'qc.surprise');
+  return result;
+}
+
+// The same team fixes each failed item with a photo (rework is not paid).
+export async function fixRework(projectId, issueId, shot) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'rework.fix', p);
+  const iss = (p.issues || []).find((i) => i.id === issueId && ['qc_fail', 'inspector_reject'].includes(i.type));
+  if (!iss || iss.status !== 'open') throw new ApiError('error.notFound');
+  if (!shot?.blob) throw new ApiError('rework.photo');
+  const ev = await saveEvidence(p, { user, role }, { stepKey: 'rework.fix', files: [{ blob: shot.blob, sha256: shot.sha256 }], stamp: shot.stamp, ai: { result: 'pass' }, meta: { issue_id: iss.id } });
+  Object.assign(iss, { status: 'fixed', fixed_by: user.id, fixed_time: Date.now(), fix_evidence: ev.id });
+  await saveProject(p, 'rework.fix');
+  await logEvent(p.id, 'rework.fixed', { note: iss.item, proof_ids: [ev.id] });
+}
+
+// Demo only: make today the surprise day (the date is otherwise picked by the system).
+export async function demoQcToday(projectId) {
+  const { user, role } = requireLogin();
+  if (!isDemo()) throw new PermissionError('demo.only', 'real-mode');
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'inspection.record', p);
+  if (p.stage !== 14) throw new ApiError('qc.notNow');
+  p.qc_visit = { ...(p.qc_visit || { runs: [] }), date: dayKey() };
+  await saveProject(p, 'qc.today');
+}
+
+// Electrical Inspector (Lifts): Admin books the date, then enters the result. Reject → fix list.
+export async function setInspectionDate(projectId, date) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'inspection.record', p);
+  if (p.stage !== 14) throw new ApiError('qc.notNow');
+  if (!Number.isFinite(date)) throw new ApiError('error.generic');
+  p.permits = { ...(p.permits || {}), inspection_date: date, inspection_result: null };
+  await saveProject(p, 'inspection.date');
+  await logEvent(p.id, 'inspection.date');
+}
+
+export async function recordInspection(projectId, result, fixes = []) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'inspection.record', p);
+  if (p.stage !== 14) throw new ApiError('qc.notNow');
+  if (!p.permits?.inspection_date) throw new ApiError('inspection.dateFirst');
+  const now = Date.now();
+  if (result === 'fail') {
+    const items = fixes.filter((k) => SURPRISE_ITEMS.some((i) => i.key === k));
+    if (!items.length) throw new ApiError('inspection.fixesNeeded');
+    p.issues = [...(p.issues || []), ...items.map((item) => ({ id: db.uid('iss'), type: 'inspector_reject', item, time: now, by: user.id, rework_team: teamOf(p), status: 'open' }))];
+    p.permits.inspection_result = 'fail';
+    await saveProject(p, 'inspection.fail');
+    await logEvent(p.id, 'inspection.fail', { note: items.join(','), loud: true });
+    return;
+  }
+  if (result !== 'pass') throw new ApiError('error.generic');
+  if (openRework(p.issues, ['inspector_reject']).length) throw new ApiError('inspection.fixesOpen');
+  for (const i of p.issues || []) if (i.type === 'inspector_reject' && i.status === 'fixed') { i.status = 'closed'; i.closed_time = now; }
+  p.permits.inspection_result = 'pass';
+  await saveProject(p, 'inspection.pass');
+  await logEvent(p.id, 'inspection.pass');
+}
+
+// ---------- stage 15: handover – 10 %, 3 signatures, rating, NOC ----------
+
+function handoverSigned(p, approvals) {
+  const fresh = approvals.filter((a) => a.gate_key === 'handover' && a.stage === 15 && a.time_device >= (p.stage_since || 0));
+  return ['customer', 'qc'].every((r) => fresh.some((a) => a.role === r)) && fresh.some((a) => ['technician', 'senior'].includes(a.role));
+}
+const handoverPaid = (p) => (p.payments || []).some((x) => x.milestone === 'handover' && x.status === 'paid');
+
+// NOC + lift handover PDF once the 10 % is paid and all three have signed. Unpaid → withheld.
+async function maybeIssueNoc(p) {
+  if (p.stage !== 15 || p.noc) return;
+  const approvals = await db.getByIndex('approvals', 'project_id', p.id);
+  if (!handoverSigned(p, approvals)) return;
+  if (!handoverPaid(p)) {
+    if (!p.flags?.noc_withheld) {
+      p.flags = { ...(p.flags || {}), noc_withheld: true };
+      await saveProject(p, 'noc.withheld');
+      await logEvent(p.id, 'noc.withheld', { loud: true });
+    }
+    return;
+  }
+  p.noc = { issued: Date.now() };
+  if (p.flags) delete p.flags.noc_withheld;
+  try {
+    await ensureDoc(p, 'handover');
+    p.noc.file_id = await ensureDoc(p, 'noc');
+  } catch (e) { console.warn('noc pdf', e); }
+  await saveProject(p, 'noc.issued');
+  await logEvent(p.id, 'noc.issued');
+  await postMessage(p, { type: 'doc', content: { key: 'noc.msg.issued', params: { code: p.code } }, file_id: p.noc.file_id || null });
+  await autoAdvance(p);
+}
+
+// Customer rates the team (stars + optional voice note). Feeds every team member's weighted rating.
+export async function rateTeam(projectId, stars, clip = null) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'handover.rate', p);
+  if (p.stage !== 15) throw new ApiError('qc.notNow');
+  if (p.rating) throw new ApiError('rating.already');
+  const n = Math.round(Number(stars));
+  if (!(n >= 1 && n <= 5)) throw new ApiError('error.generic');
+  const clipId = clip ? await saveFile(clip, { kind: 'consent', project_id: p.id, owner_id: user.id }) : null;
+  p.rating = { stars: n, time: Date.now(), clip_file: clipId };
+  for (const id of teamOf(p)) {
+    const u = await db.get('users', id);
+    if (u) { u.rating_sum = (u.rating_sum || 0) + n; u.rating_count = (u.rating_count || 0) + 1; await db.put('users', u); }
+  }
+  await saveProject(p, 'rating');
+  await logEvent(p.id, 'rating.given', { note: String(n) });
+  await autoAdvance(p);
+}
+
+// Final 10 % refused: NOC and documents are withheld and a dispute thread opens.
+export async function refuseFinalPayment(projectId, reason = '') {
+  const p = await rawProject(projectId);
+  requireOwnCustomer(p, 'payment');
+  if (p.stage !== 15 || handoverPaid(p)) throw new ApiError('qc.notNow');
+  if ((p.issues || []).some((i) => i.type === 'dispute' && i.status === 'open')) throw new ApiError('dispute.open');
+  p.issues = [...(p.issues || []), { id: db.uid('iss'), type: 'dispute', time: Date.now(), reason, status: 'open' }];
+  await saveProject(p, 'dispute');
+  await logEvent(p.id, 'handover.dispute', { note: reason, loud: true });
+  await postMessage(p, { type: 'text', thread: 'dispute', content: { key: 'handover.msg.dispute', params: { code: p.code } } });
+}
+
+// ---------- stage 16: licence, AMC, QR tickets ----------
+
+export async function saveLicence(projectId, { number, renewal, holder }) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'licence.save', p);
+  if (p.stage !== 16) throw new ApiError('qc.notNow');
+  if (!number || !String(number).trim()) throw new ApiError('licence.numberNeeded');
+  if (!Number.isFinite(renewal) || renewal <= Date.now()) throw new ApiError('licence.renewalFuture');
+  const cust = p.customer_id ? await db.get('users', p.customer_id) : null;
+  p.permits = { ...(p.permits || {}), licence_no: String(number).trim(), renewal_date: renewal, licence_holder: (holder && String(holder).trim()) || cust?.name?.en || p.contact?.name?.en || '' };
+  await saveProject(p, 'licence');
+  await logEvent(p.id, 'licence.saved', { note: p.permits.licence_no });
+}
+
+export async function createAmc(projectId) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'licence.save', p);
+  if (p.stage !== 16) throw new ApiError('qc.notNow');
+  if (p.amc?.qr) throw new ApiError('amc.already');
+  const [users, all] = await Promise.all([db.getAll('users'), db.getAll('projects')]);
+  const techs = users.filter((u) => u.roles.some((r) => ['technician', 'senior'].includes(r)) && u.status === 'active' && !u.retraining);
+  const load = (id) => all.filter((x) => x.amc?.tech_id === id).length;
+  const tech = techs.sort((a, b) => load(a.id) - load(b.id))[0];
+  p.amc = { qr: `#/amc/${p.id}`, tech_id: tech?.id || null, start: Date.now(), plan_visits: AMC_PLAN_VISITS, visits: [], tickets: [] };
+  await saveProject(p, 'amc');
+  await logEvent(p.id, 'amc.created', { note: tech?.id || '' });
+  await postMessage(p, { type: 'text', content: { key: 'amc.msg.started', params: { code: p.code, n: AMC_PLAN_VISITS } } });
+}
+
+// Public (no login): the cabin QR opens this for residents.
+export async function amcPublic(projectId) {
+  const p = await db.get('projects', projectId);
+  if (!p?.amc?.qr) throw new ApiError('amc.notActive');
+  return { id: p.id, code: p.code, area: p.site?.area, open: (p.amc.tickets || []).filter((x) => x.status === 'open').length };
+}
+
+export async function submitAmcTicket(projectId, { issue, photo = null, voice = null }) {
+  const p = await db.get('projects', projectId);
+  if (!p?.amc?.qr) throw new ApiError('amc.notActive');
+  if (!AMC_ISSUES.includes(issue)) throw new ApiError('amc.issueNeeded');
+  const resident = { user: { id: 'resident', name: { en: 'Resident', mr: 'रहिवासी', hi: 'निवासी' } }, role: 'resident' };
+  const prev = actingAs;
+  actingAs = resident;
+  try {
+    const photoId = photo?.blob ? await saveFile(photo.blob, { kind: 'site', project_id: p.id, sha256: photo.sha256 }) : null;
+    const voiceId = voice ? await saveFile(voice, { kind: 'consent', project_id: p.id }) : null;
+    const tk = { id: db.uid('tk'), time: Date.now(), issue, status: 'open', from: 'resident', photo_file: photoId, voice_file: voiceId };
+    p.amc.tickets = [...(p.amc.tickets || []), tk];
+    await saveProject(p, 'amc.ticket');
+    await logEvent(p.id, 'amc.ticket', { note: issue });
+    await postMessage(p, { type: 'text', content: { key: 'amc.msg.ticket', params: { code: p.code, issue } } });
+    return tk.id;
+  } finally { actingAs = prev; }
+}
+
+export async function closeAmcTicket(projectId, ticketId, shot) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'amc.work', p);
+  const tk = (p.amc?.tickets || []).find((x) => x.id === ticketId);
+  if (!tk || tk.status !== 'open') throw new ApiError('error.notFound');
+  if (!shot?.blob) throw new ApiError('rework.photo');
+  const ev = await saveEvidence(p, { user, role }, { stepKey: 'amc.fix', files: [{ blob: shot.blob, sha256: shot.sha256 }], stamp: shot.stamp, ai: { result: 'pass' }, meta: { ticket_id: tk.id } });
+  Object.assign(tk, { status: 'closed', closed_time: Date.now(), closed_by: user.id, evidence_id: ev.id });
+  await saveProject(p, 'amc.close');
+  await logEvent(p.id, 'amc.closed', { note: tk.issue, proof_ids: [ev.id] });
+  await postMessage(p, { type: 'text', content: { key: 'amc.msg.closed', params: { code: p.code, issue: tk.issue } } });
+}
+
+export async function logAmcVisit(projectId, shot) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'amc.work', p);
+  if (!p.amc?.qr) throw new ApiError('amc.notActive');
+  if (!shot?.blob) throw new ApiError('rework.photo');
+  const ev = await saveEvidence(p, { user, role }, { stepKey: 'amc.visit', files: [{ blob: shot.blob, sha256: shot.sha256 }], stamp: shot.stamp, ai: { result: 'pass' } });
+  p.amc.visits = [...(p.amc.visits || []), { time: Date.now(), by: user.id, evidence_id: ev.id }];
+  await saveProject(p, 'amc.visit');
+  await logEvent(p.id, 'amc.visit', { proof_ids: [ev.id] });
+}
+
+// ---------- documents (PDF): agreement, material handover, lift handover, NOC ----------
+
+export const DOC_KINDS = ['agreement', 'material', 'handover', 'noc'];
+
+export async function getDocument(projectId, kind) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'project.view', p);
+  if (!DOC_KINDS.includes(kind)) throw new ApiError('error.notFound');
+  if (kind === 'agreement') {
+    assertCan(user, role, 'project.agreement', p);
+    if (!(p.agreement?.signatures || []).length) throw new ApiError('doc.notYet');
+  }
+  if (kind === 'material' && p.stage < 12) throw new ApiError('doc.notYet');
+  if ((kind === 'handover' || kind === 'noc') && !p.noc) throw new ApiError(p.flags?.noc_withheld ? 'noc.withheld' : 'doc.notYet');
+  const id = await ensureDoc(p, kind);
+  await saveProject(p, 'doc');
+  return id;
+}
+
+async function ensureDoc(p, kind) {
+  if (p.docs?.[kind]) return p.docs[kind];
+  const blob = await buildDoc(p, kind);
+  const id = await saveFile(blob, { kind: 'doc', doc: kind, project_id: p.id, sha256: await sha256Hex(await blob.arrayBuffer()) });
+  p.docs = { ...(p.docs || {}), [kind]: id };
+  await db.put('projects', p);
+  return id;
+}
+
+async function buildDoc(p, kind) {
+  const { documentPdf } = await import('./pdf.js');
+  const { agreementSections } = await import('./docs.js');
+  const en = (k, prm) => tr(k, prm, 'en');
+  const users = await db.getAll('users');
+  const nameOf = (id) => users.find((u) => u.id === id)?.name?.en || id;
+  const cust = nameOf(p.customer_id) || p.contact?.name?.en || '';
+  const approvals = await db.getByIndex('approvals', 'project_id', p.id);
+  const sigFrom = async (list) => Promise.all(list.map(async (a) => ({
+    name: nameOf(a.by), role: en(`role.${a.role}`), method: en(`sig.method.${a.method}`) || a.method, time: a.time_device, gps: a.gps || null,
+    selfie: a.selfie_file ? (await db.get('files', a.selfie_file))?.blob || null : null,
+  })));
+  const addr = p.site?.address?.en || p.site?.area?.en || '';
+  let sections; let signatures = [];
+  if (kind === 'agreement') {
+    sections = agreementSections(p, cust, await getRules(), 'en');
+    signatures = (p.agreement.signatures || []).map((sg) => ({ name: nameOf(sg.by), role: en(`role.${sg.role || 'customer'}`), method: en('sig.method.esign'), time: sg.time, gps: sg.gps || null, selfie: null }));
+  } else if (kind === 'material') {
+    const lines = bomFor(p.spec);
+    const check = p.container?.bom_check || {};
+    sections = [
+      { title: en('doc.h.project'), text: en('doc.projectLine', { code: p.code, address: addr, customer: cust }) },
+      { title: en('doc.h.container'), text: en('doc.containerLine', { id: p.container?.id || '-', seal: p.container?.seal_no || '-' }) },
+      { title: en('doc.h.material'), text: lines.map((l) => `${en(`bom.${l.key}`)} x ${l.qty}: ${en(check[l.key] ? (check[l.key].ok ? 'container.received' : 'container.claimed') : 'doc.notChecked')}`).join('\n') },
+    ];
+    signatures = await sigFrom(approvals.filter((a) => a.gate_key === 'material.handover'));
+  } else {
+    const fresh = approvals.filter((a) => a.gate_key === 'handover' && a.stage === 15 && a.time_device >= (p.stage_since || 0));
+    signatures = await sigFrom(fresh);
+    const spec = p.spec || {};
+    const common = [
+      { title: en('doc.h.project'), text: en('doc.projectLine', { code: p.code, address: addr, customer: cust }) },
+      { title: en('agr.h.lift'), text: en('agr.spec', { floors: spec.floors || '-', stops: spec.stops || '-', type: en(`spec.${spec.type || 'automatic'}`), finish: en(`spec.${spec.finish || 'SS'}`), load: spec.load_kg || 408 }) },
+      { title: en('doc.h.inspection'), text: en('doc.inspectionLine', { date: p.permits?.inspection_date ? new Date(p.permits.inspection_date).toISOString().slice(0, 10) : '-', result: p.permits?.inspection_result || '-', permit: p.permits?.erection_no || '-' }) },
+    ];
+    sections = kind === 'handover'
+      ? [...common, { title: en('doc.h.payments'), text: (p.payments || []).map((x) => `${en(`milestone.${x.milestone}`)}: ${formatINRen(x.amount)} – ${en(x.status === 'paid' ? 'money.paid' : 'money.due')}`).join('\n') }]
+      : [...common, { title: en('doc.h.noc'), text: en('doc.nocText', { code: p.code, address: addr, customer: cust }) }];
+  }
+  return documentPdf({
+    company: 'ALL INDIA ELEVATORS COMPANY', title: en(`doc.${kind}`), code: p.code, sections, signatures,
+    note: en('doc.demoNote'),
+    labels: { signatures: en('doc.signatures'), generated: en('doc.generated'), method: en('doc.method'), gps: 'GPS' },
+  });
+}
+
+const formatINRen = (n) => `Rs ${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;

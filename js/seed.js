@@ -240,7 +240,11 @@ function buildProjects(now) {
     drawings: { released: true }, supply: { dispatch_date: now - 30 * D }, container: { id: 'CNT-111', sealed: true, online: true, unlocked: true, bom_checked: true, gps_track: [], lock_events: [] },
     team: { lead_tech: 'u_tech3', techs: ['u_t2'], qc_id: 'u_qc2', supplier_id: 'u_s2', coordinator_id: 'u_coord' },
     install: { site_start: now - 16 * D, substage: 6, pauses: [] },
-    issues: [{ id: 'iss1', type: 'qc_fail', item: 'door_interlock', time: now - 1 * D, by: 'u_qc2', rework_team: 'u_tech3', status: 'open' }],
+    issues: [{ id: 'iss1', type: 'qc_fail', item: 'interlocks', time: now - 1 * D, by: 'u_qc2', rework_team: ['u_tech3', 'u_t2'], status: 'open' }],
+    qc_visit: {
+      date: new Date(now - 1 * D + 5.5 * H).toISOString().slice(0, 10), result: 'fail',
+      runs: [{ time: now - 1 * D, by: 'u_qc2', result: 'fail', team: ['u_tech3', 'u_t2'], items: { rails: 'pass', machine: 'pass', ropes: 'pass', wiring: 'pass', earthing: 'pass', brakes: 'pass', governor: 'pass', interlocks: 'fail', final: 'pass' } }],
+    },
     stage_since: now - 2 * D,
   }));
   // 12 – licence done, AMC running with resident tickets (handover 120 days ago)

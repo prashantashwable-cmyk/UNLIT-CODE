@@ -23,10 +23,12 @@ const SCREENS = {
   project: () => import('./screens/project.js').then((m) => m.default),
   audit: () => import('./screens/audit.js').then((m) => m.default),
   guide: () => import('./screens/help.js').then((m) => m.guideScreen),
+  amc: () => import('./screens/amc.js').then((m) => m.default),
 };
 
 // Screens that work without login.
-const PUBLIC = new Set(['welcome', 'install', 'login', 'guide']);
+// 'amc' is the resident breakdown form opened from the cabin QR: no app, no login.
+const PUBLIC = new Set(['welcome', 'install', 'login', 'guide', 'amc']);
 // Role guard: screens limited to some roles.
 const ROLE_ONLY = { reports: ['admin', 'owner'], audit: ['admin', 'owner'] };
 
@@ -62,10 +64,11 @@ async function render() {
   const role = api.currentRole();
 
   // Which screen may be shown right now?
-  if (!mode && name !== 'guide') name = 'welcome';
-  else if (mode === 'real' && !isStandalone() && name !== 'guide') name = 'install';
+  const open = name === 'guide' || name === 'amc';
+  if (!mode && !open) name = 'welcome';
+  else if (mode === 'real' && !isStandalone() && !open) name = 'install';
   else if (!user && !PUBLIC.has(name)) name = 'login';
-  else if (user && (name === 'login' || name === 'welcome' || name === 'install' || !name || !SCREENS[name])) name = 'today';
+  else if (user && name !== 'amc' && (name === 'login' || name === 'welcome' || name === 'install' || !name || !SCREENS[name])) name = 'today';
   if (ROLE_ONLY[name] && !ROLE_ONLY[name].includes(role)) name = 'today';
 
   if (parseHash().name !== name) { params = []; history.replaceState(null, '', `#/${name}`); }

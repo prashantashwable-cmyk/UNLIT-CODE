@@ -119,6 +119,7 @@ test('stage 4 → 8 only with every proof: agreement, token, permit, readiness, 
   for (const k of ['shaftClean', 'shaftSize', 'pit', 'headroom', 'power', 'earth']) await page.getByTestId(`pass-${k}`).click();
   await expect(page.getByTestId('qc-release')).toHaveClass(/locked/); // shaft photo still missing
   await photo(page, 'qc-photo');
+  await expect(page.getByTestId('qc-release')).not.toHaveClass(/locked/, { timeout: 10000 });
   await page.getByTestId('qc-release').click();
   await expect(page.getByTestId('drawings-panel')).toContainText('Released');
   await page.getByTestId('approve-qc.clearance').click();

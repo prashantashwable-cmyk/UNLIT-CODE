@@ -34,10 +34,10 @@ async function faceApproval(user, role) {
     title: t('approve.faceTitle'), ghost: 'face', facing: 'user', liveness: true, count: 1, demo: api.isDemo(),
     user: L(user.name), roleLabel: t(`role.${role}`),
   });
-  if (!shots) return false;
+  if (!shots) return null;
   const ok = await api.faceCheck(shots[0]);
   if (!ok) { feedback('error'); toast(t('login.faceFail'), 'red'); speak(t('login.faceFail')); }
-  return ok;
+  return ok ? shots[0] : null; // the selfie frame is kept with the signature
 }
 
 function gatePanel(p, { user, role, refresh }) {
@@ -83,10 +83,11 @@ function gatePanel(p, { user, role, refresh }) {
       row.append(bigButton({
         icon: 'thumbUp', label: t('gate.approve'), colour: 'green', small: true, testid: `approve-${item.gate}`,
         onClick: async () => {
-          if (!(await faceApproval(user, role))) return;
+          const selfie = await faceApproval(user, role);
+          if (!selfie) return;
           await undoable({
             label: t('undo.approve'),
-            commit: async () => { await api.approveGate(p.id, item.gate, { method: 'face' }); feedback('success'); refresh(); },
+            commit: async () => { try { await api.approveGate(p.id, item.gate, { method: 'face', selfie }); feedback('success'); } catch (e) { showError(e); } refresh(); },
           });
         },
       }));
@@ -272,6 +273,11 @@ function noteFor(e) {
   if (e.action === 'install.stopWork') return t(`incident.${e.note}`);
   if (e.action === 'safety.consent') return t(`safety.method.${e.note}`);
   if (['install.arrive', 'safety.pdf', 'install.endDay'].includes(e.action)) return null;
+  if (['qc.fail', 'inspection.fail'].includes(e.action)) return e.note.split(',').map((k) => t(`qci.${k}`)).join(', ');
+  if (e.action === 'rework.fixed') return t(`qci.${e.note}`);
+  if (['amc.ticket', 'amc.closed'].includes(e.action)) return t(`amc.issue.${e.note}`);
+  if (e.action === 'rating.given') return '★'.repeat(Number(e.note) || 0);
+  if (['qc.scheduled', 'qc.pass', 'inspection.date', 'inspection.pass', 'noc.withheld', 'noc.issued', 'amc.created', 'amc.visit', 'worker.retraining'].includes(e.action)) return null;
   if (e.action === 'qc.reject') return e.note.split(',').map((k) => t(`chk.${k}`)).join(', ');
   if (['supplier.assigned', 'container.sealed', 'container.dispatched', 'container.arrived', 'container.returned', 'container.code', 'container.close', 'cabin.arrived', 'emi.applied', 'emi.approved', 'emi.rejected', 'emi.disbursed', 'qc.assigned', 'agreement.read', 'qc.checklist', 'drawings.released', 'agreement.yes', 'agreement.esign'].includes(e.action)) return null;
   if (e.action === 'bot.whatsapp' || e.action === 'bot.call' || e.action === 'bot.quote' || e.action === 'sales.cold' || e.action === 'lead.revisit') return null;

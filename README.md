@@ -4,7 +4,7 @@ Installable, offline-first web app for AIEC (Pune): one Project record per lift,
 first lead photo to the last AMC visit. Built for people who cannot read well: every field
 screen **speaks first**, uses **pictures + colours**, big buttons and **zero typing**.
 
-> Status: Phases **1 – Foundation**, **2 – Rider**, **3 – Sales**, **4 – Agreement → QC clearance**, **5 – Supply & delivery** and **6 – Installation** done (see "What's done"). Phases 7–9 follow, one at a time.
+> Status: Phases **1 – Foundation**, **2 – Rider**, **3 – Sales**, **4 – Agreement → QC clearance**, **5 – Supply & delivery**, **6 – Installation** and **7 – QC → licence → AMC** done (see "What's done"). Phases 8–9 follow, one at a time.
 
 ## Run it
 
@@ -186,6 +186,32 @@ with resident tickets (0012). Ledger entries exist in every bucket and riders ha
   locked, Admin and Owner alerted (red, loud on the timeline); only Admin restarts with a note.
 - QC Today lists the safety steps to sign; Admin sees AI-sampled and appealed proofs.
 
+## What's done (Phase 7 – QC → licence → AMC)
+
+- **Surprise QC (stage 14)**: the system picks the day when installation ends; only Admin/Owner know it
+  ahead, the QC Inspector sees it from that morning (Today → "Today's visits", with site clearances and
+  handovers). One camera burst photographs 9 items; pass/fail per item; critical items (earthing,
+  brakes, governor & safety gear, interlocks, final run) shown with a red shield.
+  - **Fail** → rework issue per item to the same team, −5 trust each, no pay for rework; **2 fails in 60
+    days → retraining** flag. The team fixes each item with a photo; the QC checks again.
+  - **Pass** → the QC signs "Surprise QC" and "Safety items" with a face check.
+- **Electrical Inspector (Lifts)**: Admin books the date and enters the result; reject → a picture fix
+  list for the team; the licence gate stays closed until passed. Stage 14 → 15 moves the team's
+  installation earnings **provisional → confirmed**.
+- **Handover (stage 15)**: customer, technician and QC each sign with a face check (selfie frame + GPS
+  kept); last 10 % by UPI; star rating (+ optional voice note) feeds each worker's weighted rating.
+  NOC + lift handover PDFs are issued when paid and signed – **unpaid → NOC withheld**; "Not paying"
+  opens a dispute thread. When everything is done the project moves to stage 16 by itself.
+- **Licence & AMC (stage 16)**: Admin saves licence number, renewal date and holder, starts the AMC (4
+  visits/year, AMC technician picked automatically). **Cabin QR card** (A6, printable) → `#/amc/<project>`.
+- **Resident breakdown form**: opened from the QR with no app and no login – pick the problem (pictures),
+  optional photo and voice note, send. The AMC technician closes it with a photo and logs service visits;
+  the customer sees AMC progress and tickets.
+- **Documents (jsPDF)**: agreement, material handover (made when stage 11 passes), lift handover and NOC –
+  each signature = name + method + time + GPS + selfie frame. The agreement PDF is only for those who may
+  see the price.
+- Team booking at delivery now adds a trainee to the lead technician (the peer relay needs two people).
+
 ## Folder
 
 ```
@@ -197,13 +223,12 @@ js/         app.js i18n.js lang/{en,mr,hi}.js voice.js feedback.js theme.js pref
 icons/      logo.svg, maskable.svg, PNG icons
 vendor/     leaflet/ (1.9.4), fonts/ (Noto Sans Devanagari 400/700, @fontsource 5.1.0),
             tesseract/ (tesseract.js 5.1.1, core 5.1.1 LSTM, eng 4.0.0_best_int),
-            jspdf/ (jsPDF 2.5.1, MIT)
+            jspdf/ (jsPDF 2.5.1, MIT), qrcode/ (qrcode-generator 1.4.4, MIT)
 tests/      Playwright tests (dev only)
 tools/      serve.mjs, gen-precache.mjs, make-icons.mjs, check-imports.mjs (dev only)
 ```
 
-qrcode (Phase 7) is vendored in the phase that uses it. jsPDF (≈360 KB) is in the offline shell and
-loaded only when a PDF is made. Tesseract (≈7 MB) is cached by the service worker in the background after install, so the
+jsPDF (≈360 KB) and qrcode are in the offline shell and loaded only when a PDF or QR code is made. Tesseract (≈7 MB) is cached by the service worker in the background after install, so the
 first load stays light.
 
 ## Tests
@@ -214,6 +239,11 @@ node tools/check-imports.mjs
 npx playwright test
 ```
 
+- `e2e.spec.js` – **acceptance**: one new project from the rider's photos to an AMC ticket, every stage
+  passed by its owner through the permission-checked api, ending on screen at stage 16.
+- `closeout.spec.js` – surprise date hidden until its day, rework before re-check, 2 fails → retraining,
+  9-photo check + critical sign-off, inspector fix list, 3 face signatures, NOC withheld until paid,
+  dispute, rating → stage 16, licence, QR card, resident ticket without login, AMC fix + visit.
 - `install.spec.js` – tasks locked until arrival + safety gate, real PDF made and "emailed", peer relay
   (no self-check, defect → rework + trust), QC-only sign-off of critical steps, earnings per step, clock
   pauses only after Admin approval, STOP WORK locks the site and only Admin clears it, video step.
