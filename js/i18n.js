@@ -87,12 +87,12 @@ export function formatDate(ts) {
 
 export function formatDateTime(ts) {
   return new Intl.DateTimeFormat(locale(), {
-    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata',
+    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'Asia/Kolkata',
   }).format(new Date(ts));
 }
 
 export function formatTime(ts) {
-  return new Intl.DateTimeFormat(locale(), { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }).format(new Date(ts));
+  return new Intl.DateTimeFormat(locale(), { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'Asia/Kolkata' }).format(new Date(ts));
 }
 
 // "3 h ago" style relative time.

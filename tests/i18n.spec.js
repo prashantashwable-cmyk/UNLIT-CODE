@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import { startDemo, watchErrors } from './helpers.js';
 
 // Latin words allowed inside Marathi/Hindi screens: brand, codes and common acronyms.
-const ALLOWED = new Set(['AIEC', 'PUN', 'QC', 'GPS', 'AMC', 'EMI', 'NOC', 'KYC', 'SMS', 'OTP', 'PIN', 'WhatsApp', 'Manager', 'OpenStreetMap', 'Leaflet', 'EP', 'LIC', 'CNT', 'UTC', 'IST', 'English', 'UPI', 'BOM', 'CCTV', 'MCB', 'SS', 'MS', 'SOP', 'GRAS', 'DEMO', 'SEAL', 'NBFC']);
+const ALLOWED = new Set(['AIEC', 'PUN', 'QC', 'GPS', 'AMC', 'EMI', 'NOC', 'KYC', 'SMS', 'OTP', 'PIN', 'WhatsApp', 'Manager', 'OpenStreetMap', 'Leaflet', 'EP', 'LIC', 'CNT', 'UTC', 'IST', 'English', 'UPI', 'BOM', 'CCTV', 'MCB', 'SS', 'MS', 'SOP', 'GRAS', 'DEMO', 'SEAL', 'NBFC', 'PDF']);
 
 async function strayWords(page) {
   const text = await page.locator('#app').innerText();

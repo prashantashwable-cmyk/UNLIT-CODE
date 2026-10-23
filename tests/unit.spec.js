@@ -6,6 +6,8 @@ import { can, viewProject, PermissionError, assertCan, maskPhone, ACTIONS } from
 import { checkGate, statusColour, STAGES, isStageOwner, progressPct, endOfDayIST } from '../js/stages.js';
 import { weightedRating, trustScore } from '../js/trust.js';
 import { bucketTotals, moveEntries } from '../js/ledger.js';
+import * as sop from '../js/sop.js';
+import { stageClock } from '../js/stages.js';
 import en from '../js/lang/en.js';
 import mr from '../js/lang/mr.js';
 import hi from '../js/lang/hi.js';
@@ -413,4 +415,86 @@ test.describe('supply rules', () => {
     expect(rows[23].balance).toBe(0);
     expect(rows.reduce((s, r) => s + r.principal, 0)).toBe(600000);
   });
+});
+
+// ---------- Phase 6: installation rules (sop.js) ----------
+
+test('sop: 5 sub-stages, 13 steps, critical steps go to QC, trainee earns half', () => {
+  expect(sop.SUBSTAGES.map((s) => s.n)).toEqual([1, 2, 3, 4, 5]);
+  expect(sop.STEP_COUNT).toBe(13);
+  const critical = sop.ALL_STEPS.filter((s) => s.critical).map((s) => s.key);
+  expect(critical).toEqual(['install.wiring.earthing', 'install.test.brakes', 'install.test.governor', 'install.test.interlocks', 'install.test.final']);
+  expect(sop.stepDef('install.rails.plumb').video).toBe(true);
+  expect(sop.reviewerRoles(sop.stepDef('install.wiring.earthing'))).toEqual(['qc']);
+  expect(sop.reviewerRoles(sop.stepDef('install.rails.brackets'))).toEqual(['qc', 'admin']);
+  expect(sop.stepPay({ technician_per_lift: 45000 }, 'technician')).toBe(3462);
+  expect(sop.stepPay({ technician_per_lift: 45000 }, 'trainee')).toBe(1731);
+  // Every step and sub-stage has words in all three languages.
+  for (const st of sop.ALL_STEPS) for (const d of [en, mr, hi]) { expect(d[`sop.${st.key}`]).toBeTruthy(); expect(d[`sop.${st.key}.do`]).toBeTruthy(); }
+  for (const s of sop.SUBSTAGES) for (const d of [en, mr, hi]) expect(d[`sub.${s.key}`]).toBeTruthy();
+});
+
+test('sop: work lock order – stop work, site start, pause, arrival, safety gate', () => {
+  const now = Date.UTC(2026, 9, 23, 6);
+  const day = sop.dayKey(now);
+  expect(day).toBe('2026-10-23');
+  expect(sop.dayKey(Date.UTC(2026, 9, 23, 19))).toBe('2026-10-24'); // after 18:30 UTC it is the next day in IST
+  const p = { stage: 13, flags: {}, install: { site_start: now - D, pauses: [] } };
+  expect(sop.workLock({ ...p, stage: 12 }, 't1', now)).toBe('install.lock.stage');
+  expect(sop.workLock({ ...p, flags: { stop_work: {} } }, 't1', now)).toBe('install.lock.stopWork');
+  expect(sop.workLock({ ...p, install: {} }, 't1', now)).toBe('install.lock.siteStart');
+  expect(sop.workLock({ ...p, install: { ...p.install, pauses: [{ start: now, end: null }] } }, 't1', now)).toBe('install.lock.paused');
+  expect(sop.workLock(p, 't1', now)).toBe('install.lock.arrive');
+  p.install.arrivals = { [day]: { t1: { time: now } } };
+  expect(sop.workLock(p, 't1', now)).toBe('install.lock.safety');
+  p.install.safety = { [day]: { photos: { scaffold: 'e1', barricade: 'e2', earthing: 'e3' }, consents: { t1: { time: now } } } };
+  expect(sop.workLock(p, 't1', now)).toBeNull();
+  // Yesterday's gate does not count today.
+  expect(sop.workLock(p, 't1', now + D)).toBe('install.lock.arrive');
+  // A rejected pause does not lock.
+  expect(sop.workLock({ ...p, install: { ...p.install, pauses: [{ start: now, end: null, rejected: true }] } }, 't1', now)).toBeNull();
+});
+
+test('sop: step states – AI pass, critical waits for QC, rejected redo, rework resets', () => {
+  const now = Date.now();
+  const p = { id: 'p1', stage: 13, stage_since: now - 5 * D, install: { substage: 4 } };
+  const ev = (id, step, extra = {}) => ({ id, project_id: 'p1', stage: 13, step_key: step, by: 't1', time_device: now - D, ai: { result: 'pass' }, files: [{}], ...extra });
+  const evidence = [ev('a', 'install.wiring.controller'), ev('b', 'install.wiring.earthing')];
+  let steps = sop.substageSteps(p, 4, evidence, new Map());
+  expect(steps.map((s) => s.state)).toEqual(['done', 'review']);
+  expect(sop.substageComplete(p, 4, evidence, new Map())).toBe(false);
+  expect(sop.substageComplete(p, 4, evidence, new Map([['b', 'pass']]))).toBe(true);
+  steps = sop.substageSteps(p, 4, evidence, new Map([['b', 'reject']]));
+  expect(steps[1].state).toBe('redo');
+  // An appeal or an AI sample waits for a person; an AI retake never counts.
+  expect(sop.stepState(p, sop.ALL_STEPS[0], [ev('c', 'install.survey.shaft', { ai: { result: 'appeal' } })], new Map()).state).toBe('review');
+  expect(sop.stepState(p, sop.ALL_STEPS[0], [ev('c', 'install.survey.shaft', { ai: { result: 'retake' } })], new Map()).state).toBe('todo');
+  // Rework after a peer defect: older proofs no longer count.
+  const pr = { ...p, install: { substage: 4, rework_since: { 4: now - 1000 } } };
+  expect(sop.substageSteps(pr, 4, evidence, new Map([['b', 'pass']])).map((s) => s.state)).toEqual(['todo', 'todo']);
+  expect(sop.substageAuthors(p, 4, evidence)).toEqual(['t1']);
+  expect(sop.peerDone({ install: { peer: { 3: { result: 'ok', time: now } } }, stage_since: 0 }, 4)).toBe(true);
+  expect(sop.peerDone({ install: { peer: { 3: { result: 'defect', time: now } } }, stage_since: 0 }, 4)).toBe(false);
+  expect(sop.peerDone({ install: {} }, 1)).toBe(true);
+});
+
+test('install clock: 14 days from site start; only approved pauses move the deadline', () => {
+  const now = Date.now();
+  const p = { stage: 13, stage_since: now - 20 * D, install: { site_start: now - 3 * D, pauses: [] } };
+  expect(stageClock(p, now).deadline).toBe(now - 3 * D + 14 * D);
+  p.install.pauses.push({ start: now - 2 * D, end: now - D, approved: false });
+  expect(stageClock(p, now).deadline).toBe(now + 11 * D);
+  p.install.pauses[0].approved = true;
+  expect(stageClock(p, now).deadline).toBe(now + 12 * D);
+});
+
+test('permissions: install work for the team only; STOP WORK by team, QC, admin; only admin decides', () => {
+  const p = { id: 'p1', stage: 13, team: { lead_tech: 't1', techs: [], qc_id: 'q1' } };
+  expect(can(tech, 'technician', 'install.work', p)).toBe(true);
+  expect(can(techOther, 'technician', 'install.work', p)).toBe(false);
+  expect(can(qc, 'qc', 'install.stopWork', p)).toBe(true);
+  expect(can(qc, 'qc', 'install.work', p)).toBe(false);
+  expect(can(admin, 'admin', 'install.decide', p)).toBe(true);
+  expect(can(tech, 'technician', 'install.decide', p)).toBe(false);
+  expect(can(owner, 'owner', 'install.decide', p)).toBe(false);
 });

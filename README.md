@@ -4,7 +4,7 @@ Installable, offline-first web app for AIEC (Pune): one Project record per lift,
 first lead photo to the last AMC visit. Built for people who cannot read well: every field
 screen **speaks first**, uses **pictures + colours**, big buttons and **zero typing**.
 
-> Status: Phases **1 – Foundation**, **2 – Rider**, **3 – Sales**, **4 – Agreement → QC clearance** and **5 – Supply & delivery** done (see "What's done"). Phases 6–9 follow, one at a time.
+> Status: Phases **1 – Foundation**, **2 – Rider**, **3 – Sales**, **4 – Agreement → QC clearance**, **5 – Supply & delivery** and **6 – Installation** done (see "What's done"). Phases 7–9 follow, one at a time.
 
 ## Run it
 
@@ -159,6 +159,33 @@ with resident tickets (0012). Ledger entries exist in every bucket and riders ha
 - **EMI**: customer applies (12/24/36 months, consent to share data); NBFC approves/rejects, sees and
   shows the EMI schedule, and pays the delivery share straight to AIEC when the container is at site.
 
+## What's done (Phase 6 – Installation)
+
+- **Site start**: the technician approves the site start (face check); the **14-day clock** starts then.
+- **Arrive**: inside the 50 m geofence + live selfie with helmet and harness (self-confirmed).
+- **Daily safety gate – blocks every task** (enforced in the api): one photo each of scaffolding, shaft
+  barricade and earthing, plus **each worker's own consent** (5-second selfie video saying "Scaffolding,
+  barricading and earthing are safe", or the big consent button). The first consent of the day makes the
+  **Daily Safety Log PDF** (jsPDF: company header, project, date, team + levels, consent times, selfie
+  frame, 3 stamped photos, GPS, statement in English/Marathi/Hindi) – saved to the project, shown to the
+  builder and "emailed" (chat message with the PDF). The builder sees all daily PDFs on the project.
+- **5 sub-stages, 13 SOP steps** (survey · brackets & rails with a 10 s plumb-line video · cabin, machine &
+  roping · electrical with the earthing reading · testing & commissioning). Each SOP card: illustration,
+  animated demo, voice instruction, then the camera (2–3 photos or a 10 s video), AI check with retake /
+  "Ask a person". Critical steps (red shield: earthing, brakes, governor & safety gear, door interlocks,
+  final test) always wait for the **QC Inspector's sign-off**; Admin may not sign them; trainees may not do
+  them. Marked **"Sample SOP – not for real installation"**.
+- **Provisional earnings per verified step** (per-lift amount ÷ 13; trainee half), paid once – rework is
+  not paid again. End day shows and speaks the day's steps and earnings.
+- **Peer relay**: before work on sub-stage N, a team member who did not do N-1 checks it with 3 photos.
+  OK → work opens. Defect → −3 trust for the previous team, rework issue, the sub-stage opens again and
+  its old proofs no longer count.
+- **Pause** (power cut / builder not ready / rain + photo): work locks; the clock stops **only after Admin
+  approves** (Admin Today shows waiting pauses); the builder is told; Resume reopens work.
+- **STOP WORK** (red, any worker on site, QC or Admin): incident type + photo → every phone on the site is
+  locked, Admin and Owner alerted (red, loud on the timeline); only Admin restarts with a note.
+- QC Today lists the safety steps to sign; Admin sees AI-sampled and appealed proofs.
+
 ## Folder
 
 ```
@@ -169,13 +196,14 @@ js/         app.js i18n.js lang/{en,mr,hi}.js voice.js feedback.js theme.js pref
             map.js chat.js notify.js seed.js ui.js icons.js screens/*.js
 icons/      logo.svg, maskable.svg, PNG icons
 vendor/     leaflet/ (1.9.4), fonts/ (Noto Sans Devanagari 400/700, @fontsource 5.1.0),
-            tesseract/ (tesseract.js 5.1.1, core 5.1.1 LSTM, eng 4.0.0_best_int)
+            tesseract/ (tesseract.js 5.1.1, core 5.1.1 LSTM, eng 4.0.0_best_int),
+            jspdf/ (jsPDF 2.5.1, MIT)
 tests/      Playwright tests (dev only)
 tools/      serve.mjs, gen-precache.mjs, make-icons.mjs, check-imports.mjs (dev only)
 ```
 
-Libraries for later phases (jsPDF – Phase 6, qrcode – Phase 7) are vendored in the phase that
-uses them. Tesseract (≈7 MB) is cached by the service worker in the background after install, so the
+qrcode (Phase 7) is vendored in the phase that uses it. jsPDF (≈360 KB) is in the offline shell and
+loaded only when a PDF is made. Tesseract (≈7 MB) is cached by the service worker in the background after install, so the
 first load stays light.
 
 ## Tests
@@ -186,6 +214,9 @@ node tools/check-imports.mjs
 npx playwright test
 ```
 
+- `install.spec.js` – tasks locked until arrival + safety gate, real PDF made and "emailed", peer relay
+  (no self-check, defect → rework + trust), QC-only sign-off of critical steps, earnings per step, clock
+  pauses only after Admin approval, STOP WORK locks the site and only Admin clears it, video step.
 - `unit.spec.js` – permission matrix, stage gates, status colours, install clock, weighted rating
   (1×5 → 4.36; 50×4.8 → 4.72), trust score, ledger, translation parity, no file picker, precache list.
 - `api.spec.js` – through the real api: technician cannot read customer phone, rider cannot see

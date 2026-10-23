@@ -454,3 +454,22 @@ button.card { cursor: pointer; font: inherit; }
 .lock-log ol { margin: 0; padding-left: 20px; font-size: var(--fs-sm); }
 .emi-plan summary { min-height: 44px; display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 700; }
 .cctv-dot { color: #e53935; animation: pulse 1s infinite; border-radius: 50%; margin-top: 15vh; }
+
+/* ---------- Phase 6: installation ---------- */
+.cam-shutter.rec { background: var(--c-stop, #d32f2f); }
+.sample-tag { display: flex; align-items: center; gap: 6px; color: var(--t-stop, #b00020); font-size: .9em; font-weight: 600; margin: 4px 0 8px; }
+.sub-title { display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--gap); }
+.sop-card { display: flex; flex-direction: column; gap: 8px; }
+.sop-head { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.sop-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sop-title strong { display: flex; align-items: center; gap: 4px; }
+.sop-title small { display: flex; align-items: center; gap: 4px; }
+.sop-art { width: 72px; height: 72px; border-radius: 12px; background: var(--card-solid); color: var(--text); border: 1px solid var(--line); padding: 6px; }
+.sop-art svg { width: 100%; height: 100%; }
+.sop-demo .sop-art.animated { width: min(280px, 70vw); height: min(280px, 70vw); margin: 0 auto; }
+.shield-red { color: var(--t-stop, #c62828); display: inline-flex; }
+.helmet-ask .photo-full { max-height: 40vh; object-fit: contain; }
+.end-day { text-align: center; }
+.end-day > .ic { width: 64px; height: 64px; color: var(--c-money, #2e7d32); }
+.install-panel .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.install-panel .btn-row > .big-btn { flex: 1 1 140px; }

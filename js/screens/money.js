@@ -50,7 +50,7 @@ async function earningsView(role) {
   if (!entries.length) parts.push(emptyState('coins', t('money.noEntries')));
   for (const e of entries) {
     parts.push(card(h('div', { class: 'kv' }, statusDot(BUCKET_COLOUR[e.bucket]),
-      h('span', {}, t(`source.${e.source_key}`)), h('small', {}, `${t(`bucket.${e.bucket}`)} · ${formatDate(e.time)}`),
+      h('span', {}, e.source_key.startsWith('install.step:') ? t('source.install.step', { step: t(`sop.${e.source_key.slice(13)}`) }) : t(`source.${e.source_key}`)), h('small', {}, `${t(`bucket.${e.bucket}`)} · ${formatDate(e.time)}`),
       h('strong', { class: e.amount < 0 ? 'c-text-red' : '' }, formatINR(e.amount)))));
   }
   return { parts, voice: `${t('money.totalEarned')}: ${spokenINR(total)}. ${t('bucket.paid')}: ${spokenINR(totals.paid)}` };

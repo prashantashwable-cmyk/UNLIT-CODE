@@ -38,8 +38,15 @@
 11. **Bot meeting a counter-offer.** When a customer asks for more than the bot's next step, the bot offers the customer's number (still within its limit) instead of dropping further.
 12. **Self-approval for inspections.** "Whoever created evidence cannot approve it" is applied per gate to the evidence that gate checks (QC clearance checks the customer's readiness photos; QC/peer checks check installation photos). An inspector's own measurement photos are inspection records, so a QC can still photograph and approve the shaft.
 13. **Gates after a step back.** When a project goes back (QC rejects the site), only proofs made after it re-entered the stage count.
-14. **Agreement PDF.** The agreement is shown and read aloud in the app; the PDF version comes with the other PDFs in Phase 6 (jsPDF).
+14. **Agreement PDF.** The agreement is shown and read aloud in the app; its PDF comes in Phase 7 together with the material/lift handover and NOC PDFs (same `js/pdf.js`). Phase 6 makes the Daily Safety Log PDF.
 15. **Supplier share.** The spec says "70% in; supplier share" without the split: the supplier's supply price is booked as payable 75 % when the delivery stage passes and 25 % when the cabin stage passes (setting `supplier_split`).
 16. **After an unpaid return** the project goes back to stage 10; packing photos must be taken again before the container is sent again (its contents are re-checked).
 17. **Cabin shipping** is immediate in the demo (one tap by the supplier marks it shipped and at site).
 18. **Undo vs. switching person.** Any action still in its 10-second Undo window is committed, as the person who made it, before a role or person switch.
+19. **Peer relay with one site team.** Projects have one team, so "the team starting sub-stage N" is any team member (trainee included) who did not prove sub-stage N-1. Peer OK marks the previous sub-stage's provisional earnings as confirmable; moving them to Confirmed (QC pass + Admin + customer) is Phase 7.
+20. **Pause start time.** An approved pause counts from the moment it was asked (with its photo), not from the moment Admin approved it. An unapproved or refused pause never counts.
+21. **Earnings per step.** The per-lift amount (setting `technician_per_lift`) ÷ 13 steps goes to the person who proved the step; a trainee earns half. Critical / sampled steps pay when the QC Inspector signs. Rework after a peer defect or QC rejection is not paid again.
+22. **Daily safety PDF.** One per site per day, remade as more workers consent; "emailed" once a day as a chat message with the PDF to the builder (real email needs a mail provider). Labels are English; the safety statement is in all 3 languages (Devanagari is drawn as images because jsPDF fonts have no Devanagari).
+23. **Video steps.** The plumb-line and final-test clips (10 s) and the 5 s consent video use MediaRecorder; the demo camera records its animated scene. Where a browser cannot record, the last frame is kept as the proof.
+24. **Trainees** may not do critical steps (api-enforced). "With a technician" is not checked by the app.
+25. **STOP WORK** can be pressed by any team worker, the project's QC Inspector or Admin; the Owner is alerted but only Admin restarts the work, with a note.

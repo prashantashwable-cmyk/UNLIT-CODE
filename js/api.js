@@ -16,6 +16,11 @@ import {
 import { coveredHexes, routeKm, neighbours, hexId, hexCenter, HEX_AREA_KM2 } from './hex.js';
 import { seedDemo, DEFAULT_RULES, AREAS } from './seed.js';
 import {
+  stepDef, substageSteps, substageComplete, substageAuthors, peerDone, openPause, safetyFor, workLock, dayKey, stepPay, needsReview,
+  reviewerRoles, SAFETY_PHOTOS, PAUSE_REASONS, PEER_PHOTOS, LAST_SUBSTAGE, ARRIVE_M, PEER_DEFECT_TRUST,
+} from './sop.js';
+import { t as tr } from './i18n.js';
+import {
   baseCost, priceAt, levelOf, quoteAllowed, botCounter, paymentSchedule, leadScore, FIRST_LEVEL, FLOOR_LEVEL, BOT_LIMIT,
 } from './pricing.js';
 
@@ -385,6 +390,21 @@ export async function addEvidence({ projectId, stepKey, files, stamp, ai, kind =
   const { user, role } = requireLogin();
   const p = await rawProject(projectId);
   assertCan(user, role, 'evidence.capture', p);
+  if (stepKey.startsWith('install.')) await assertStepOpen(p, user, role, stepKey);
+  if (stepKey.startsWith('safety.')) assertSafetyPhoto(p, user, role, stepKey);
+  const rec = await saveEvidence(p, { user, role }, { stepKey, files, stamp, ai, kind, meta });
+  if (stepKey.startsWith('safety.')) {
+    const day = dayKey();
+    const sd = installDay(p, day);
+    sd.photos = { ...(sd.photos || {}), [stepKey.slice(7)]: rec.id };
+    await saveProject(p, 'safety.photo');
+  }
+  if (stepKey.startsWith('install.') && !needsReview(rec)) await payStep(p, rec);
+  return rec.id;
+}
+
+// Shared by addEvidence and the flows that carry their own photos (pause, stop work, peer check).
+async function saveEvidence(p, { user, role }, { stepKey, files, stamp, ai, kind = 'site', meta = {} }) {
   for (const f of files) {
     if (await hashUsed(f.sha256)) throw new ApiError('camera.duplicatePhoto');
   }
@@ -401,7 +421,7 @@ export async function addEvidence({ projectId, stepKey, files, stamp, ai, kind =
   };
   await write('evidence', rec);
   await logEvent(p.id, 'evidence.add', { proof_ids: [rec.id], note: stepKey });
-  return rec.id;
+  return rec;
 }
 
 export async function listEvidence(projectId) {
@@ -414,18 +434,26 @@ export async function listEvidence(projectId) {
 }
 
 // Human review of evidence. Whoever created it can never approve it.
+// Critical installation steps (earthing, brakes, governor, interlocks, final test) are signed by QC only.
 export async function reviewEvidence(evidenceId, result) {
   const { user, role } = requireLogin();
   const e = await db.get('evidence', evidenceId);
+  if (!e) throw new ApiError('error.notFound');
   const p = await rawProject(e.project_id);
   assertCan(user, role, 'evidence.review', p);
   if (e.by === user.id) throw new PermissionError('evidence.review', 'self-approval');
+  if (!['pass', 'reject'].includes(result)) throw new ApiError('error.generic');
+  const step = stepDef(e.step_key);
+  if (step && !reviewerRoles(step).includes(role)) throw new PermissionError('evidence.review', 'qc-only');
+  if ((await db.getByIndex('approvals', 'project_id', p.id)).some((a) => a.gate_key === `review:${e.id}`)) throw new ApiError('review.already');
   const rec = {
-    id: db.uid('ap'), project_id: p.id, gate_key: `review:${e.id}`, evidence_id: e.id, result,
+    id: db.uid('ap'), project_id: p.id, stage: p.stage, gate_key: `review:${e.id}`, evidence_id: e.id, result,
     by: user.id, role, method: 'pin', time_device: Date.now(), time_server: null,
   };
   await write('approvals', rec);
-  await logEvent(p.id, `evidence.${result}`, { proof_ids: [e.id] });
+  await logEvent(p.id, `evidence.${result}`, { proof_ids: [e.id], note: e.step_key });
+  if (step && result === 'pass') await payStep(p, e);
+  emit('data');
 }
 
 // ---------- gates and stages ----------
@@ -462,6 +490,11 @@ export async function approveGate(projectId, gateKey, { method = 'face' } = {}) 
   };
   await write('approvals', rec);
   await logEvent(p.id, 'gate.approve', { note: gateKey, proof_ids: [rec.id] });
+  if (gateKey === 'site.start' && p.stage === 13 && !p.install?.site_start) {
+    // The 14-day installation clock starts now.
+    p.install = { ...(p.install || {}), site_start: Date.now(), substage: p.install?.substage || 1 };
+    await saveProject(p, 'install.start');
+  }
   return rec.id;
 }
 
@@ -839,11 +872,11 @@ function requireDesk() {
 }
 
 // Message from the bot (or the site contact) into the project chat. content = {key, params} so it shows in every language.
-async function postMessage(p, { type = 'bot', content, by, file_ids = null, buttons = null }) {
+async function postMessage(p, { type = 'bot', content, by, file_ids = null, buttons = null, file_id = null }) {
   const who = by || actor();
   const rec = {
     id: db.uid('msg'), project_id: p.id, thread: 'main', by: who.user?.id || who.id, by_name: who.user?.name || who.name, role: who.role,
-    type, content, file_ids, buttons, file_id: null, gate: null, time_device: Date.now(), time_server: null,
+    type, content, file_ids, buttons, file_id, gate: null, time_device: Date.now(), time_server: null,
   };
   await write('messages', rec);
   emit('chat');
@@ -1884,4 +1917,352 @@ export async function resetDemo() {
   await db.clearAll();
   await seedDemo();
   logout();
+}
+
+// ---------- installation (stage 13): arrival, safety gate, SOP steps, peer relay, pause, STOP WORK ----------
+
+async function saveProject(p, op) {
+  await db.put('projects', p);
+  await queue('projects', p.id, op);
+  emit('data');
+}
+
+function installDay(p, day) {
+  p.install = p.install || {};
+  p.install.safety = p.install.safety || {};
+  p.install.safety[day] = p.install.safety[day] || { photos: {}, consents: {} };
+  return p.install.safety[day];
+}
+
+function reviewMap(approvals) {
+  return new Map(approvals.filter((a) => a.gate_key?.startsWith('review:')).map((a) => [a.evidence_id, a.result]));
+}
+
+async function installData(p) {
+  const [evidence, approvals] = await Promise.all([db.getByIndex('evidence', 'project_id', p.id), db.getByIndex('approvals', 'project_id', p.id)]);
+  return { evidence, reviews: reviewMap(approvals) };
+}
+
+function requireWorkerOn(p, action = 'install.work') {
+  const { user, role } = requireLogin();
+  assertCan(user, role, action, p);
+  if (p.stage !== 13) throw new ApiError('install.lock.stage');
+  return { user, role };
+}
+
+const currentSubstage = (p) => p.install?.substage || 1;
+
+// Is this SOP step open for this worker right now? (called by addEvidence)
+async function assertStepOpen(p, user, role, stepKey) {
+  assertCan(user, role, 'install.work', p);
+  const lock = workLock(p, user.id);
+  if (lock) throw new ApiError(lock);
+  const step = stepDef(stepKey);
+  if (!step) throw new ApiError('error.notFound');
+  const n = currentSubstage(p);
+  if (step.substage !== n) throw new ApiError('install.lock.notThisSubstage');
+  if (!peerDone(p, n)) throw new ApiError('install.lock.peerFirst');
+  // Trainees do low-risk steps only.
+  if (role === 'trainee' && step.critical) throw new PermissionError('install.critical', 'trainee');
+  const { evidence, reviews } = await installData(p);
+  const st = substageSteps(p, n, evidence, reviews).find((s) => s.key === stepKey);
+  if (st.state === 'done') throw new ApiError('install.stepDone');
+  if (st.state === 'review') throw new ApiError('install.waitReview');
+}
+
+function assertSafetyPhoto(p, user, role, stepKey) {
+  assertCan(user, role, 'install.work', p);
+  if (p.stage !== 13) throw new ApiError('install.lock.stage');
+  if (p.flags?.stop_work) throw new ApiError('install.lock.stopWork');
+  if (!p.install?.site_start) throw new ApiError('install.lock.siteStart');
+  if (!SAFETY_PHOTOS.includes(stepKey.slice(7))) throw new ApiError('error.notFound');
+  if (!safetyFor(p, user.id).arrived) throw new ApiError('install.lock.arrive');
+}
+
+// A verified step earns its share of the per-lift amount once (rework is not paid again).
+async function payStep(p, ev) {
+  const source = `install.step:${ev.step_key}`;
+  const paidAlready = (await db.getAll('ledger')).some((l) => l.project_id === p.id && l.source_key === source);
+  if (paidAlready) return;
+  const rules = await getRules();
+  await addLedger(ev.by, p.id, source, stepPay(rules, ev.role), 'provisional');
+  await logEvent(p.id, 'install.earned', { note: ev.step_key, proof_ids: [ev.id] });
+}
+
+// Everything the installation screens need, for the person asking.
+export async function installStatus(projectId) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'project.view', p);
+  const { evidence, reviews } = await installData(p);
+  const n = currentSubstage(p);
+  const finished = n > LAST_SUBSTAGE;
+  const steps = finished ? [] : substageSteps(p, n, evidence, reviews).map((s) => ({
+    key: s.key, substage: s.substage, photos: s.photos || 0, video: !!s.video, critical: !!s.critical, art: s.art, ghost: s.ghost,
+    state: s.state, evidence_id: s.evidence?.id || null, by: s.evidence?.by || null, file_id: s.evidence?.files?.[0]?.file_id || null,
+  }));
+  const safety = safetyFor(p, user.id);
+  const authors = n >= 2 && !finished ? substageAuthors(p, n - 1, evidence) : [];
+  const pdfs = Object.entries(p.install?.safety || {}).filter(([, d]) => d.pdf_file).map(([d, v]) => ({ day: d, file_id: v.pdf_file, time: v.pdf_time })).sort((a, b) => b.day.localeCompare(a.day));
+  return {
+    substage: n, finished, steps,
+    complete: !finished && substageComplete(p, n, evidence, reviews),
+    started: !!p.install?.site_start,
+    lock: p.stage === 13 ? workLock(p, user.id) : 'install.lock.stage',
+    safety: { ...safety, consents: Object.keys(p.install?.safety?.[safety.day]?.consents || {}) },
+    peerNeeded: !finished && !peerDone(p, n),
+    peerMine: !finished && !peerDone(p, n) && !authors.includes(user.id),
+    pause: openPause(p), pauses: p.install?.pauses || [],
+    stopWork: p.flags?.stop_work || null,
+    rework: (p.issues || []).filter((i) => i.type === 'rework' && i.status === 'open'),
+    pdfs,
+  };
+}
+
+// Arrive: inside the 50 m geofence + a live selfie wearing helmet & harness.
+export async function arriveOnSite(projectId, selfie, { helmet = false } = {}) {
+  const p = await rawProject(projectId);
+  const { user } = requireWorkerOn(p);
+  if (p.flags?.stop_work) throw new ApiError('install.lock.stopWork');
+  if (!helmet) throw new ApiError('install.helmetNeeded');
+  if (!selfie?.stamp || distanceM(selfie.stamp, p.site) > ARRIVE_M) throw new ApiError('install.tooFar');
+  if (!(await faceMatch(user, selfie))) throw new ApiError('login.faceFail');
+  const fileId = await saveFile(selfie.blob, { kind: 'selfie', owner_id: user.id, project_id: p.id, sha256: selfie.sha256 });
+  const day = dayKey();
+  p.install = p.install || {};
+  p.install.arrivals = p.install.arrivals || {};
+  p.install.arrivals[day] = { ...(p.install.arrivals[day] || {}), [user.id]: { time: Date.now(), file_id: fileId, lat: selfie.stamp.lat, lng: selfie.stamp.lng } };
+  await saveProject(p, 'install.arrive');
+  await logEvent(p.id, 'install.arrive');
+}
+
+// Consent: 5-second selfie video saying the site is safe, or the big consent button.
+// The first complete gate of the day makes the Daily Safety PDF and "emails" it to the builder.
+export async function giveSafetyConsent(projectId, { method = 'tap', clip = null } = {}) {
+  const p = await rawProject(projectId);
+  const { user } = requireWorkerOn(p);
+  if (p.flags?.stop_work) throw new ApiError('install.lock.stopWork');
+  const s = safetyFor(p, user.id);
+  if (!s.arrived) throw new ApiError('install.lock.arrive');
+  if (!s.photosDone) throw new ApiError('install.safetyPhotosFirst');
+  if (s.consented) return s.pdf;
+  let fileId = null; let posterId = null;
+  if (method === 'video') {
+    if (!clip?.blob) throw new ApiError('install.videoNeeded');
+    posterId = await saveFile(clip.blob, { kind: 'selfie', owner_id: user.id, project_id: p.id, sha256: clip.sha256 });
+    if (clip.video) fileId = await saveFile(clip.video, { kind: 'selfie', owner_id: user.id, project_id: p.id, sha256: clip.video_sha256 });
+  }
+  const sd = installDay(p, s.day);
+  sd.consents = { ...(sd.consents || {}), [user.id]: { time: Date.now(), method, file_id: fileId, poster_id: posterId } };
+  await logEvent(p.id, 'safety.consent', { note: method });
+  try {
+    sd.pdf_file = await makeSafetyPdf(p, s.day);
+    sd.pdf_time = Date.now();
+    await logEvent(p.id, 'safety.pdf');
+  } catch (e) {
+    console.warn('safety pdf', e); // the gate still counts; the PDF is made again at the next consent
+  }
+  const firstMail = !sd.emailed && sd.pdf_file;
+  if (firstMail) sd.emailed = Date.now();
+  await saveProject(p, 'safety.consent');
+  if (firstMail) {
+    await postMessage(p, { type: 'doc', content: { key: 'safety.msg.emailed', params: { code: p.code, day: s.day } }, file_id: sd.pdf_file });
+  }
+  return sd.pdf_file;
+}
+
+async function makeSafetyPdf(p, day) {
+  const { safetyPdf } = await import('./pdf.js');
+  const sd = p.install.safety[day];
+  const users = await db.getAll('users');
+  const uname = (id) => users.find((u) => u.id === id)?.name?.en || id;
+  const teamIds = [p.team?.lead_tech, ...(p.team?.techs || [])].filter(Boolean);
+  const consents = Object.entries(sd.consents || {}).map(([id, c]) => ({ name: uname(id), time: c.time, method: c.method === 'video' ? 'selfie video' : 'consent button' }));
+  const first = Object.values(sd.consents || {}).sort((a, b) => a.time - b.time)[0];
+  const arrival = Object.values(p.install.arrivals?.[day] || {})[0];
+  const selfieId = first?.poster_id || arrival?.file_id;
+  const selfie = selfieId ? (await db.get('files', selfieId))?.blob : null;
+  const photos = [];
+  for (const k of SAFETY_PHOTOS) {
+    const ev = sd.photos?.[k] ? await db.get('evidence', sd.photos[k]) : null;
+    const f = ev?.files?.[0] ? await db.get('files', ev.files[0].file_id) : null;
+    photos.push({ label: `${tr(`safety.photo.${k}`, null, 'en')} / ${tr(`safety.photo.${k}`, null, 'mr')}`, blob: f?.blob || null });
+  }
+  const blob = await safetyPdf({
+    company: 'ALL INDIA ELEVATORS COMPANY', code: p.code, day, address: p.site?.address?.en || '',
+    gps: arrival ? { lat: arrival.lat, lng: arrival.lng } : { lat: p.site.lat, lng: p.site.lng },
+    team: teamIds.map((id) => ({ name: uname(id), level: users.find((u) => u.id === id)?.level || '' })),
+    consents, selfie, photos,
+    statement: { en: tr('safety.statement', null, 'en'), mr: tr('safety.statement', null, 'mr'), hi: tr('safety.statement', null, 'hi') },
+    sample: tr('sop.sample', null, 'en'),
+    labels: {
+      title: 'Daily Safety Log', project: 'Project', date: 'Date', site: 'Site', team: 'Team', consent: 'Safety consent',
+      selfie: 'Selfie frame', statement: 'Statement', generated: 'Generated',
+    },
+  });
+  return saveFile(blob, { kind: 'doc', project_id: p.id, sha256: await sha256Hex(await blob.arrayBuffer()), doc: 'safety', day });
+}
+
+// Sub-stage done: every step proven (critical steps signed by QC) → the next team takes over.
+export async function completeSubstage(projectId) {
+  const p = await rawProject(projectId);
+  const { user } = requireWorkerOn(p);
+  const lock = workLock(p, user.id);
+  if (lock) throw new ApiError(lock);
+  const n = currentSubstage(p);
+  if (n > LAST_SUBSTAGE) throw new ApiError('install.allDone');
+  const { evidence, reviews } = await installData(p);
+  if (!substageComplete(p, n, evidence, reviews)) throw new ApiError('install.stepsLeft');
+  p.install.substage = n + 1;
+  for (const i of p.issues || []) if (i.type === 'rework' && i.substage === n && i.status === 'open') { i.status = 'closed'; i.closed_time = Date.now(); }
+  await saveProject(p, 'install.substage');
+  await logEvent(p.id, 'install.substage', { note: String(n) });
+  return p.install.substage;
+}
+
+// Peer relay: whoever starts sub-stage N checks N-1 with 3 photos. They may not check their own work.
+export async function peerCheck(projectId, ok, shots, { reason = '' } = {}) {
+  const p = await rawProject(projectId);
+  const { user, role } = requireWorkerOn(p);
+  const lock = workLock(p, user.id);
+  if (lock) throw new ApiError(lock);
+  const n = currentSubstage(p);
+  if (n < 2 || n > LAST_SUBSTAGE || peerDone(p, n)) throw new ApiError('install.noPeerCheck');
+  const { evidence } = await installData(p);
+  const authors = substageAuthors(p, n - 1, evidence);
+  if (authors.includes(user.id)) throw new PermissionError('peer.check', 'self-approval');
+  if (!shots || shots.length < PEER_PHOTOS) throw new ApiError('install.peerPhotos');
+  const ev = await saveEvidence(p, { user, role }, {
+    stepKey: 'peer.check', files: shots.map((s) => ({ blob: s.blob, sha256: s.sha256 })), stamp: shots[0].stamp, ai: { result: 'pass' },
+    meta: { checked_substage: n - 1, result: ok ? 'ok' : 'defect' },
+  });
+  const now = Date.now();
+  p.install.peer = { ...(p.install.peer || {}), [n - 1]: { by: user.id, time: now, result: ok ? 'ok' : 'defect', evidence_id: ev.id } };
+  await write('approvals', {
+    id: db.uid('ap'), project_id: p.id, stage: 13, gate_key: 'peer.check', substage: n - 1, result: ok ? 'ok' : 'defect',
+    by: user.id, role, method: 'photo', time_device: now, time_server: null,
+  });
+  if (ok) {
+    await saveProject(p, 'peer.ok');
+    await logEvent(p.id, 'peer.ok', { note: String(n - 1), proof_ids: [ev.id] });
+    return 'ok';
+  }
+  // Defect: trust points off the previous team, a rework task, and the sub-stage opens again.
+  for (const id of authors) {
+    const u = await db.get('users', id);
+    if (u) { u.trust = Math.max(0, (u.trust ?? 0) - PEER_DEFECT_TRUST); await db.put('users', u); }
+  }
+  p.issues = [...(p.issues || []), { id: db.uid('iss'), type: 'rework', substage: n - 1, by: user.id, time: now, team: authors, evidence_id: ev.id, reason, status: 'open' }];
+  p.install.rework_since = { ...(p.install.rework_since || {}), [n - 1]: now };
+  p.install.substage = n - 1;
+  await saveProject(p, 'peer.defect');
+  await logEvent(p.id, 'peer.defect', { note: String(n - 1), proof_ids: [ev.id], loud: true });
+  return 'defect';
+}
+
+// Pause (power cut, builder not ready, rain) with photo proof. The 14-day clock only stops
+// once Admin approves; an unapproved pause never counts.
+export async function requestPause(projectId, reason, shot) {
+  const p = await rawProject(projectId);
+  const { user, role } = requireWorkerOn(p);
+  if (!PAUSE_REASONS.includes(reason)) throw new ApiError('error.generic');
+  if (openPause(p)) throw new ApiError('install.alreadyPaused');
+  if (!shot?.blob) throw new ApiError('install.pausePhoto');
+  const ev = await saveEvidence(p, { user, role }, { stepKey: 'pause.photo', files: [{ blob: shot.blob, sha256: shot.sha256 }], stamp: shot.stamp, ai: { result: 'pass' }, meta: { reason } });
+  const pause = { id: db.uid('ps'), reason, start: Date.now(), end: null, approved: false, by: user.id, evidence_id: ev.id };
+  p.install.pauses = [...(p.install.pauses || []), pause];
+  p.flags = { ...(p.flags || {}), waiting: true };
+  await saveProject(p, 'install.pause');
+  await logEvent(p.id, 'install.pause', { note: reason, proof_ids: [ev.id] });
+  return pause.id;
+}
+
+export async function decidePause(projectId, pauseId, approve) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'install.decide', p);
+  const ps = (p.install?.pauses || []).find((x) => x.id === pauseId);
+  if (!ps || ps.approved || ps.rejected) throw new ApiError('error.notFound');
+  ps.decided_by = user.id;
+  ps.decided_time = Date.now();
+  if (approve) ps.approved = true;
+  else { ps.rejected = true; ps.end = ps.end || Date.now(); p.flags = { ...(p.flags || {}), waiting: false }; }
+  await saveProject(p, 'install.pauseDecide');
+  await logEvent(p.id, approve ? 'install.pauseOk' : 'install.pauseNo', { note: ps.reason });
+  if (approve) await postMessage(p, { type: 'text', content: { key: 'install.msg.paused', params: { code: p.code, reason: ps.reason } } });
+}
+
+export async function endPause(projectId) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  if (!can(user, role, 'install.work', p)) assertCan(user, role, 'install.decide', p);
+  const ps = openPause(p);
+  if (!ps) throw new ApiError('error.notFound');
+  ps.end = Date.now();
+  p.flags = { ...(p.flags || {}), waiting: false };
+  await saveProject(p, 'install.resume');
+  await logEvent(p.id, 'install.resume', { note: ps.reason });
+  if (ps.approved) await postMessage(p, { type: 'text', content: { key: 'install.msg.resumed', params: { code: p.code } } });
+}
+
+// STOP WORK: every phone on the site locks its tasks; Admin and Owner are alerted; only Admin clears it.
+export const INCIDENT_KINDS = ['injury', 'electric', 'unsafe'];
+
+export async function stopWork(projectId, kind, shots) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'install.stopWork', p);
+  if (p.stage !== 13) throw new ApiError('install.lock.stage');
+  if (p.flags?.stop_work) throw new ApiError('install.lock.stopWork');
+  if (!INCIDENT_KINDS.includes(kind)) throw new ApiError('error.generic');
+  if (!shots?.length) throw new ApiError('install.incidentPhoto');
+  const ev = await saveEvidence(p, { user, role }, { stepKey: 'incident.photo', kind: 'site', files: shots.map((s) => ({ blob: s.blob, sha256: s.sha256 })), stamp: shots[0].stamp, ai: { result: 'pass' }, meta: { incident: kind } });
+  p.flags = { ...(p.flags || {}), stop_work: { by: user.id, by_name: user.name, role, time: Date.now(), kind, evidence_id: ev.id } };
+  await saveProject(p, 'install.stopWork');
+  await logEvent(p.id, 'install.stopWork', { note: kind, proof_ids: [ev.id], loud: true });
+  await audit('install.stopWork', { project_id: p.id, kind });
+  await postMessage(p, { type: 'text', content: { key: 'install.msg.stopWork', params: { code: p.code, kind } } });
+}
+
+export async function clearStopWork(projectId, note) {
+  const { user, role } = requireLogin();
+  const p = await rawProject(projectId);
+  assertCan(user, role, 'install.decide', p);
+  if (!p.flags?.stop_work) throw new ApiError('error.notFound');
+  if (!note || !String(note).trim()) throw new ApiError('override.reasonNeeded');
+  p.install.incidents = [...(p.install?.incidents || []), { ...p.flags.stop_work, cleared_by: user.id, cleared_time: Date.now(), note }];
+  delete p.flags.stop_work;
+  await saveProject(p, 'install.stopCleared');
+  await logEvent(p.id, 'install.stopCleared', { note, loud: true });
+  await audit('install.stopCleared', { project_id: p.id });
+}
+
+// Evidence waiting for a person: QC sees everything (and signs critical steps); Admin sees the rest.
+export async function reviewQueue() {
+  const { user, role } = requireLogin();
+  if (!['qc', 'admin'].includes(role)) return [];
+  const projects = (await db.getAll('projects')).filter((p) => p.stage === 13 && can(user, role, 'evidence.review', p));
+  const out = [];
+  for (const p of projects) {
+    const { evidence, reviews } = await installData(p);
+    for (const st of substageSteps(p, currentSubstage(p), evidence, reviews)) {
+      if (st.state !== 'review' || !reviewerRoles(st).includes(role) || st.evidence.by === user.id) continue;
+      out.push({
+        project_id: p.id, code: p.code, step_key: st.key, critical: !!st.critical, evidence_id: st.evidence.id, by: st.evidence.by,
+        files: st.evidence.files.map((f) => f.file_id), appeal: st.evidence.ai?.result === 'appeal', time: st.evidence.time_device,
+      });
+    }
+  }
+  return out.sort((a, b) => b.critical - a.critical || a.time - b.time);
+}
+
+// End of the day: what I proved today and the provisional earnings it made.
+export async function endDay(projectId) {
+  const p = await rawProject(projectId);
+  const { user } = requireWorkerOn(p);
+  const day = dayKey();
+  const mine = (await db.getByIndex('evidence', 'project_id', p.id)).filter((e) => e.by === user.id && e.step_key.startsWith('install.') && dayKey(e.time_device) === day);
+  const earned = (await db.getByIndex('ledger', 'user_id', user.id)).filter((l) => l.project_id === p.id && l.source_key.startsWith('install.step:') && dayKey(l.time) === day);
+  await logEvent(p.id, 'install.endDay');
+  return { steps: new Set(mine.map((e) => e.step_key)).size, amount: earned.reduce((s, l) => s + l.amount, 0), substage: currentSubstage(p) };
 }

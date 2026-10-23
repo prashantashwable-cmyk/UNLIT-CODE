@@ -266,6 +266,12 @@ function noteFor(e) {
   if (e.action === 'container.key') return t(`container.key.${e.note}`);
   if (e.action === 'container.open') return t(`container.m.${e.note}`);
   if (e.action === 'bom.ok' || e.action === 'bom.claim') return t(`bom.${e.note}`);
+  if (['install.earned', 'evidence.pass', 'evidence.reject'].includes(e.action)) return t(`gate.${e.note}`);
+  if (['install.substage', 'peer.ok', 'peer.defect'].includes(e.action)) return t(`sub.${['survey', 'rails', 'machine', 'wiring', 'testing'][Number(e.note) - 1]}`);
+  if (['install.pause', 'install.pauseOk', 'install.pauseNo', 'install.resume'].includes(e.action)) return t(`pause.${e.note}`);
+  if (e.action === 'install.stopWork') return t(`incident.${e.note}`);
+  if (e.action === 'safety.consent') return t(`safety.method.${e.note}`);
+  if (['install.arrive', 'safety.pdf', 'install.endDay'].includes(e.action)) return null;
   if (e.action === 'qc.reject') return e.note.split(',').map((k) => t(`chk.${k}`)).join(', ');
   if (['supplier.assigned', 'container.sealed', 'container.dispatched', 'container.arrived', 'container.returned', 'container.code', 'container.close', 'cabin.arrived', 'emi.applied', 'emi.approved', 'emi.rejected', 'emi.disbursed', 'qc.assigned', 'agreement.read', 'qc.checklist', 'drawings.released', 'agreement.yes', 'agreement.esign'].includes(e.action)) return null;
   if (e.action === 'bot.whatsapp' || e.action === 'bot.call' || e.action === 'bot.quote' || e.action === 'sales.cold' || e.action === 'lead.revisit') return null;
@@ -299,6 +305,7 @@ export default async function projectScreen({ params, user, role, refresh }) {
         h('span', { class: `status-text c-text-${p.colour}` }, ` · ${t(`status.${p.colour}`)}`), clock ? h('small', {}, ` · ${clock}`) : null),
       p.lead?.duplicates?.length ? h('div', { class: 'hint' }, icon('layers', 'ic sm'), t('project.duplicates', { n: p.lead.duplicates.length })) : null,
       p.flags?.cancelled ? h('div', { class: 'c-text-red', 'data-testid': 'cancelled' }, icon('stop', 'ic sm'), t('cancel.done')) : null,
+      p.flags?.stop_work ? h('div', { class: 'c-text-red', 'data-testid': 'stop-head' }, icon('stop', 'ic sm'), t('stop.alert', { code: p.code })) : null,
       p.issues?.filter((i) => i.status === 'open').map((i) => h('div', { class: 'c-text-red' }, icon('warning', 'ic sm'), t(`issue.${i.type}`)))),
     gatePanel(p, { user, role, refresh }),
     await salesPanel(p, { role, refresh }),

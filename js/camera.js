@@ -142,7 +142,10 @@ function demoSource(kind, project) {
     raf = requestAnimationFrame(draw);
   };
   draw();
-  return { el: canvas, width: 960, height: 720, setScene, stop: () => { cancelAnimationFrame(raf); if (url) URL.revokeObjectURL(url); }, demo: true };
+  return {
+    el: canvas, width: 960, height: 720, setScene, stop: () => { cancelAnimationFrame(raf); if (url) URL.revokeObjectURL(url); }, demo: true,
+    get stream() { return canvas.captureStream ? canvas.captureStream(24) : null; },
+  };
 }
 
 async function liveSource(facing) {
@@ -154,7 +157,7 @@ async function liveSource(facing) {
   video.srcObject = stream;
   await video.play().catch(() => {});
   await new Promise((r) => (video.videoWidth ? r() : video.addEventListener('loadedmetadata', r, { once: true })));
-  return { el: video, get width() { return video.videoWidth; }, get height() { return video.videoHeight; }, stop: () => stream.getTracks().forEach((tr) => tr.stop()) };
+  return { el: video, stream, get width() { return video.videoWidth; }, get height() { return video.videoHeight; }, stop: () => stream.getTracks().forEach((tr) => tr.stop()) };
 }
 
 function grab(src) {
@@ -176,6 +179,32 @@ function frameDiff(a, b) {
   return sum / (w * hh * 3);
 }
 
+// Video steps (plumb line, final test): 10 seconds; tests shorten it with localStorage aiec.videoMs.
+export function videoMs() {
+  try { const v = Number(localStorage.getItem('aiec.videoMs')); if (v > 0) return v; } catch { /* ignore */ }
+  return 10000;
+}
+
+// Record a clip from the camera source. Resolves null if this browser cannot record.
+async function recordClip(src, ms, onTick) {
+  const stream = src.stream;
+  if (!stream || !('MediaRecorder' in window)) { await new Promise((r) => setTimeout(r, ms)); return null; }
+  try {
+    const rec = new MediaRecorder(stream);
+    const chunks = [];
+    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    const stopped = new Promise((r) => { rec.onstop = r; });
+    rec.start(250);
+    const start = Date.now();
+    const timer = setInterval(() => onTick(Math.max(0, Math.ceil((ms - (Date.now() - start)) / 1000))), 250);
+    await new Promise((r) => setTimeout(r, ms));
+    clearInterval(timer);
+    rec.stop();
+    await stopped;
+    return chunks.length ? new Blob(chunks, { type: rec.mimeType || 'video/webm' }) : null;
+  } catch { return null; }
+}
+
 const toBlob = (canvas) => new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.85));
 
 /**
@@ -183,13 +212,15 @@ const toBlob = (canvas) => new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.8
  * opts: {title, stepLabel, count, ghost, project, facing, liveness, requireGeofence, user, roleLabel, demo}
  *   steps: [{key, label, ghost, scene}] – a burst where each shot has its own ghost outline
  *   check: (stepKey) => {result:'pass'|'retake', reason} – AI step check after each shot
+ *   video: true – one clip of videoMs() (or clipMs, if shorter) (shot.video = Blob|null, shot.video_sha256); the photo is its last frame
  */
 export function openCamera(opts) {
   const {
     title, liveness = false, project = null, facing = 'environment', requireGeofence = false,
-    user = '', roleLabel = '', demo = false, voice, steps = null, check = null,
+    user = '', roleLabel = '', demo = false, voice, steps = null, check = null, video: asVideo = false,
   } = opts;
-  const count = steps ? steps.length : (opts.count || 1);
+  const clipLen = opts.clipMs ? Math.min(opts.clipMs, videoMs()) : videoMs();
+  const count = asVideo ? 1 : steps ? steps.length : (opts.count || 1);
   const stepAt = (i) => (steps ? steps[Math.min(i, steps.length - 1)] : { key: null, label: opts.stepLabel || '', ghost: opts.ghost || 'site', scene: opts.sceneKind });
   let { ghost } = stepAt(0);
   return new Promise((resolve) => {
@@ -210,9 +241,9 @@ export function openCamera(opts) {
     const status = h('div', { class: 'cam-status', role: 'status', 'aria-live': 'polite' });
     const doneBtn = bigButton({ icon: 'check', label: t('common.done'), colour: 'green', testid: 'cam-done', small: true, onClick: () => finish(shots) });
     doneBtn.hidden = true;
-    const shutter = h('button', { type: 'button', class: 'cam-shutter', 'aria-label': t('camera.take'), 'data-testid': 'cam-shutter', onclick: () => shoot() }, icon(facing === 'user' ? 'me' : 'camera'));
+    const shutter = h('button', { type: 'button', class: `cam-shutter${asVideo ? ' rec' : ''}`, 'aria-label': t(asVideo ? 'camera.record' : 'camera.take'), 'data-testid': 'cam-shutter', onclick: () => shoot() }, icon(asVideo ? 'video' : facing === 'user' ? 'me' : 'camera'));
     shutter.disabled = true; // enabled once the camera is live
-    const promptText = liveness ? t('camera.livenessPrompt') : (voice || t('camera.voice', { n: count }));
+    const promptText = liveness ? t('camera.livenessPrompt') : (voice || (asVideo ? t('camera.videoVoice', { s: Math.round(clipLen / 1000) }) : t('camera.voice', { n: count })));
 
     const overlay = h('div', { class: 'camera', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
       h('div', { class: 'cam-top' },
@@ -292,6 +323,14 @@ export function openCamera(opts) {
       shutter.disabled = true;
       try {
         let livenessOk = false;
+        let clip = null;
+        if (asVideo) {
+          status.className = 'cam-status c-red';
+          const tick = (sec) => { status.textContent = t('camera.recordingN', { s: sec }); };
+          tick(Math.round(clipLen / 1000));
+          speak(t('camera.recordingStart'));
+          clip = await recordClip(src, clipLen, tick);
+        }
         let frame = grab(src);
         if (liveness) {
           // Liveness: ask for a head turn / blink and compare two frames.
@@ -339,9 +378,10 @@ export function openCamera(opts) {
         const hash = await sha256Hex(blob);
         if (hashes.has(hash)) { status.className = 'cam-status c-red'; status.textContent = t('camera.duplicatePhoto'); feedback('error'); return; }
         hashes.add(hash);
+        const videoPart = asVideo ? { video: clip, video_sha256: clip ? await sha256Hex(clip) : null } : {};
         const ai = check ? check(stepKey) : null;
         if (ai?.result === 'retake') {
-          rejected = { blob, sha256: hash, stamp, step: stepKey, ai };
+          rejected = { blob, sha256: hash, stamp, step: stepKey, ai, ...videoPart };
           appealBtn.hidden = false;
           status.className = 'cam-status c-red';
           status.textContent = t('ai.retake', { reason: t(`ai.reason.${ai.reason}`) });
@@ -350,7 +390,7 @@ export function openCamera(opts) {
         }
         rejected = null;
         appealBtn.hidden = true;
-        shots.push({ blob, sha256: hash, stamp, step: stepKey, ai, liveness: livenessOk });
+        shots.push({ blob, sha256: hash, stamp, step: stepKey, ai, liveness: livenessOk, ...videoPart });
         const url = URL.createObjectURL(blob);
         thumbs.append(h('img', { src: url, alt: t('camera.photoN', { n: shots.length }), class: 'cam-thumb' }));
         status.className = 'cam-status c-green'; status.textContent = t('camera.saved');

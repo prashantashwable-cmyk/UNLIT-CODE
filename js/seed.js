@@ -227,8 +227,8 @@ function buildProjects(now) {
     install: {
       site_start: now - 10 * D, substage: 2,
       pauses: [
-        { reason: 'power', start: now - 6 * D, end: now - 4 * D, approved: true, by: 'u_tech1' },
-        { reason: 'rain', start: now - 5 * H, end: null, approved: false, by: 'u_tech1' },
+        { id: 'ps1', reason: 'power', start: now - 6 * D, end: now - 4 * D, approved: true, by: 'u_tech1', decided_by: 'u_admin' },
+        { id: 'ps2', reason: 'rain', start: now - 5 * H, end: null, approved: false, by: 'u_tech1' },
       ],
     },
     flags: { waiting: true }, stage_since: now - 10 * D,

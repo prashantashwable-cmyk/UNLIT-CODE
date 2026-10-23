@@ -56,7 +56,15 @@ function bubble(m, me, refresh, role) {
       body.append(h('a', { class: 'link-btn', href: `#/project/${m.project_id}` }, t('sales.answerHere')));
     }
   }
-  else if (m.type === 'callback') body.append(icon('callback', 'ic sm'), t('help.callbackSent'));
+  else if (m.type === 'doc') {
+    body.append(h('div', { class: 'sales-msg' }, icon('doc', 'ic sm'), msgText(m.content)));
+    if (m.file_id) {
+      body.append(h('button', {
+        type: 'button', class: 'chip', 'data-testid': 'chat-doc',
+        onclick: async () => { try { window.open(await api.getFileURL(m.file_id), '_blank', 'noopener'); } catch (e) { showError(e); } },
+      }, icon('download', 'ic sm'), t('chat.openPdf')));
+    }
+  } else if (m.type === 'callback') body.append(icon('callback', 'ic sm'), t('help.callbackSent'));
   else if (m.type === 'answer') body.append(icon(m.content === 'approved' ? 'thumbUp' : 'thumbDown', 'ic sm'), t(`chat.answer.${m.content}`), ` · ${t(`gatekey.${m.gate}`)}`);
   else if (m.type === 'voice' || m.type === 'photo') {
     const el = m.type === 'voice' ? h('audio', { controls: true, preload: 'none' }) : h('img', { class: 'chat-photo', alt: t('chat.photo') });

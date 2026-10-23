@@ -146,6 +146,10 @@ const MATRIX = {
     ['admin', always],
   ]),
   'evidence.review': { qc: isQC, admin: always },
+  // Installation (stage 13): SOP steps, safety gate, pause; STOP WORK by anyone on site; Admin decides.
+  'install.work': { trainee: isTeamWorker, technician: isTeamWorker, senior: isTeamWorker },
+  'install.stopWork': { trainee: isTeamWorker, technician: isTeamWorker, senior: isTeamWorker, qc: isQC, admin: always },
+  'install.decide': { admin: always },
   'stage.advance': { admin: always }, // owner roles of the stage are added in stages.canAdvance
   'override.request': { admin: always },
   'override.confirm': { admin: always, owner: always },

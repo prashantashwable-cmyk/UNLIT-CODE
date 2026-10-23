@@ -6,6 +6,7 @@ import { feedback } from '../feedback.js';
 import { icon } from '../icons.js';
 import { roleGroup, projectCard, sectionTitle } from './common.js';
 import { openHelp } from './help.js';
+import { reviewCard, pauseDecision, stopAlert } from './stages/install.js';
 
 async function earnText(role, step) {
   if (!step?.project || step.kind !== 'do') return null;
@@ -81,6 +82,29 @@ export default async function home(ctx) {
     }
 
     const projects = await api.listProjects();
+
+    // Installation exceptions: STOP WORK first (Admin + Owner), then pauses and proofs waiting for a person.
+    if (['admin', 'owner'].includes(role)) {
+      const stopped = projects.filter((p) => p.flags?.stop_work);
+      if (stopped.length) {
+        node.append(sectionTitle(t('stop.alerts'), 'stop'));
+        stopped.forEach((p) => node.append(stopAlert(p, { role, refresh })));
+      }
+    }
+    if (role === 'admin') {
+      const pauses = projects.filter((p) => p.stage === 13).flatMap((p) => (p.install?.pauses || []).filter((ps) => !ps.approved && !ps.rejected && !ps.end).map((ps) => [p, ps]));
+      if (pauses.length) {
+        node.append(sectionTitle(t('pause.waitingTitle'), 'hourglass'));
+        pauses.forEach(([p, ps]) => node.append(pauseDecision(p, ps, refresh)));
+      }
+    }
+    if (['qc', 'admin'].includes(role)) {
+      const queue = await api.reviewQueue();
+      if (queue.length) {
+        node.append(sectionTitle(t(role === 'qc' ? 'review.critical' : 'review.title'), 'shield'));
+        queue.slice(0, 6).forEach((q) => node.append(reviewCard(q, refresh)));
+      }
+    }
 
     // Supplier: just-in-time alerts by project stage. NBFC: loan requests waiting.
     if (role === 'supplier') {

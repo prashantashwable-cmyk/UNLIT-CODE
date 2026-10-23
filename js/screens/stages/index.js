@@ -7,6 +7,7 @@ import { drawingsPanel } from './drawings.js';
 import { productionPanel, packingPanel, cabinPanel } from './supply.js';
 import { containerPanel, cabinPayment } from './container.js';
 import { emiPanel } from './emi.js';
+import { installPanel } from './install.js';
 
 export async function stagePanels(p, ctx) {
   return [
@@ -20,6 +21,7 @@ export async function stagePanels(p, ctx) {
     cabinPanel(p, ctx),
     cabinPayment(p, ctx),
     emiPanel(p, ctx),
+    await installPanel(p, ctx),
     drawingsPanel(p, ctx),
     p.stage > 5 && p.agreement ? await agreementPanel(p, ctx) : null,
   ].filter(Boolean);
